@@ -114,13 +114,16 @@ async function captureNow(): Promise<void> {
     const pos = await win.outerPosition();
     const size = await win.outerSize();
     // 捕获窗口外矩形区域：坐标/尺寸为物理像素，降采样 0.5（模糊后无观感损失）；
-    // 自身已被截屏排除，拍到的是窗口背后的内容
+    // 自身已被截屏排除，拍到的是窗口背后的内容。
+    // 向外多截取 48px（与背景层 inset:-48px 对应，容纳最大模糊半径 40px 的采样）：
+    // 否则背景图边缘的模糊采样落到图外透明区域，出现“中间模糊、四周不模糊”。
     const inset = 4;
-    const w = Math.max(8, size.width - inset * 2);
-    const h = Math.max(8, size.height - inset * 2);
+    const margin = 48;
+    const w = Math.max(8, size.width - inset * 2 + margin * 2);
+    const h = Math.max(8, size.height - inset * 2 + margin * 2);
     const bytes = await invoke<Uint8Array>("capture_screen_region", {
-      x: pos.x + inset,
-      y: pos.y + inset,
+      x: pos.x + inset - margin,
+      y: pos.y + inset - margin,
       w,
       h,
       scale: 0.5,

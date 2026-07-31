@@ -400,12 +400,14 @@ body,
    其自带 tint 正是“白蒙版”来源）。面板全部透明，文字加投影保证对比度。 */
 
 /* 实时动态毛玻璃的背景层：<img> 直接承载后端截屏帧（objectURL，零 JS 编解码），
-   filter:blur 走 GPU 合成层（--glass-blur 由毛玻璃强度控制，随设置实时渐变） */
+   filter:blur 走 GPU 合成层（--glass-blur 由毛玻璃强度控制，随设置实时渐变）。
+   背景层向外扩展 48px（容纳最大模糊半径 40px 的采样范围）：否则 blur 在图片边缘
+   采样会落到图外透明区域，出现“中间模糊、四周不模糊”的观感问题。 */
 .note-window .note-bg-live {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  inset: -48px;
+  width: calc(100% + 96px);
+  height: calc(100% + 96px);
   object-fit: cover;
   z-index: 0;
   pointer-events: none;

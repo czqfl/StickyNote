@@ -210,7 +210,9 @@ body.has-bg-img { background: transparent; }
 body.has-bg-img::before {
   content: "";
   position: fixed;
-  inset: -24px;
+  /* 向外扩展以容纳模糊半径的采样范围（最大 40px），
+     否则预览区边缘的模糊会因采样落到图外而减弱 */
+  inset: -48px;
   z-index: -1;
   background-image: var(--md-bg-img);
   background-size: cover;
