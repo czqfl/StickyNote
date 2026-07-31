@@ -384,6 +384,20 @@ body,
 /* 核心：透明主题把桌面壁纸当背景图画在便签上（.has-bg），毛玻璃强度就是 CSS 模糊半径，
    与「自定义背景图片」完全一致——纯背景图 + 纯模糊，没有任何色罩/蒙版（弃用系统 Acrylic，
    其自带 tint 正是“白蒙版”来源）。面板全部透明，文字加投影保证对比度。 */
+
+/* 实时动态毛玻璃的背景层：<img> 直接承载后端截屏帧（objectURL，零 JS 编解码），
+   filter:blur 走 GPU 合成层（--glass-blur 由毛玻璃强度控制，随设置实时渐变） */
+.note-window .note-bg-live {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+  pointer-events: none;
+  filter: blur(var(--glass-blur, 0px));
+  transform: translateZ(0);
+}
 .note-window.bg-transparent {
   background: transparent;
   box-shadow:
@@ -1377,7 +1391,8 @@ body,
 /* ===== 设置按钮（齿轮）===== */
 .icon-btn.gear {
   color: var(--accent);
-  font-size: 16px;
+  font-size: 14px;
+  padding: 0 3px;
 }
 
 .icon-btn.gear:hover {

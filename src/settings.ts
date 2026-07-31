@@ -408,7 +408,7 @@ export async function openSettingsModal(): Promise<void> {
       </div>
       <div class="settings-footer">
         <span class="settings-msg" id="set-msg"></span>
-        <button class="btn-primary" id="set-save">保存</button>
+        <button class="btn-primary" id="set-save">应用</button>
       </div>
     </div>
   `;
@@ -943,7 +943,7 @@ export async function openSettingsModal(): Promise<void> {
     el.addEventListener("change", () => { dirty = true; });
   });
 
-  // ---- 保存 ----
+  // ---- 应用（原“保存”）：点击立即生效配置，但面板保持打开，可连续调整对比 ——
   (overlay.querySelector("#set-save") as HTMLButtonElement).addEventListener("click", async () => {
     draft.translation_provider = providerSel.value;
     if (draft.translation_provider === "baidu") {
@@ -977,12 +977,11 @@ export async function openSettingsModal(): Promise<void> {
       } catch (e) {
         console.error("注册全局快捷键失败:", e);
       }
-      msg.textContent = "已保存";
+      msg.textContent = "已应用";
       msg.classList.add("ok");
       window.dispatchEvent(new CustomEvent(SETTINGS_EVENT));
-      setTimeout(close, 600);
     } catch (err) {
-      msg.textContent = "保存失败：" + String(err);
+      msg.textContent = "应用失败：" + String(err);
       msg.classList.remove("ok");
     }
   });

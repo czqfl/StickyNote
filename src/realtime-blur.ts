@@ -1,29 +1,37 @@
 // 实时动态毛玻璃（透明主题）：截取“便签背后的真实屏幕内容”作为毛玻璃底图，
-// 每帧更新 + 窗口移动/缩放时即时补拍，让模糊内容随背后的画面实时变化
+// 定时刷新 + 窗口移动/缩放时即时补拍，让模糊内容随背后的画面实时变化
 // （手机系统毛玻璃同款效果），而不是把壁纸扫下来当固定背景。
 //
-// 管线：GDI BitBlt 截屏 → JPEG 编码（后端，二进制 IPC 直传）→ createImageBitmap
-// 解码 → canvas 重编码 data URL → 作为 --note-bg-img 背景图 → CSS filter:blur。
-// 便签窗口自身通过 WDA_EXCLUDEFROMCAPTURE 从截屏中排除，不会把自己拍进背景产生重影。
+// 性能优化（与上一版 canvas + toDataURL 的差异，正是“延迟大”的根因）：
+//  - 不再每帧把截屏画进 canvas 再 toDataURL 重编码（CPU 编解码 + 大字符串），
+//    而是把后端返回的 JPEG 字节直接 objectURL 给 <img> 承载：解码交给浏览器的
+//    硬件/JPEG 解码器，合成与模糊全走 GPU 合成层，JS 侧几乎零开销；
+//  - 后端 GDI BitBlt 本身即 GPU 加速截屏，区域=便签窗口大小（小区域），
+//    降采样 0.5 + 低质量 JPEG，单帧成本约几毫秒；
+//  - 刷新间隔 200ms（5fps）跟随背后内容变化，移动/缩放立即补拍，观感实时。
 //
-// 性能：截屏区域 = 便签窗口大小（小区域），降采样 0.5 + 低质量 JPEG；约 4~5fps
-// 更新 + 移动/缩放即时补拍，开销远低于连续全屏截屏，肉眼观感已是“实时”。
+// 便签窗口自身通过 WDA_EXCLUDEFROMCAPTURE 从截屏中排除，不会把自己拍进背景产生重影。
 
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { applyGlassBlur } from "./glass";
+import { applyAdaptiveColors } from "./panel-bg";
 
 let running = false;
 let timer: number | undefined;
 let el: HTMLElement | null = null;
 /** Markdown 预览 iframe 的 body（有则同步更新它的背景，预览区同样实时） */
 let mdTarget: HTMLElement | null = null;
+/** 承载实时截屏帧的背景 <img>（直接做 CSS blur，GPU 合成） */
+let imgEl: HTMLImageElement | null = null;
 let lastStrength = 0;
 let moveListenersAttached = false;
 let capturePending = false;
 let capturing = false;
+let currentUrl: string | null = null;
+let lastAdaptiveCheck = 0;
 
-/** 开启/更新实时毛玻璃：target 为带 ::before 背景图的面板；strength 0~100（CSS 模糊半径） */
+/** 开启/更新实时毛玻璃：target 为面板元素；strength 0~100（CSS 模糊半径） */
 export function startRealtimeBlur(
   target: HTMLElement,
   strength: number,
@@ -32,30 +40,48 @@ export function startRealtimeBlur(
   el = target;
   mdTarget = mdBody;
   lastStrength = Math.max(0, Math.min(100, Math.round(strength)));
+  ensureBgLayer();
   if (!running) {
     running = true;
     invoke("set_exclude_from_capture", { enable: true }).catch(() => {});
     attachMoveListeners();
     void captureNow();
-    // 定时刷新：跟随背后内容（其它窗口移动/播放画面/桌面变化）实时更新
-    timer = window.setInterval(() => void captureNow(), 450);
+    timer = window.setInterval(() => void captureNow(), 200);
   } else {
-    // 仅强度变化：补一帧即可
+    // 仅强度/目标变化：补一帧即可
     void captureNow();
   }
   applyGlassBlur({ target, strength: lastStrength, enabled: true });
 }
 
-/** 关闭实时毛玻璃：停止截屏并恢复自身可被截屏（如开启录屏/截图时便签可见） */
+/** 关闭实时毛玻璃：停止截屏、移除背景层并恢复自身可被截屏 */
 export function stopRealtimeBlur(): void {
   running = false;
   el = null;
   mdTarget = null;
+  if (imgEl) {
+    imgEl.remove();
+    imgEl = null;
+  }
+  if (currentUrl) {
+    URL.revokeObjectURL(currentUrl);
+    currentUrl = null;
+  }
   if (timer !== undefined) {
     clearInterval(timer);
     timer = undefined;
   }
   invoke("set_exclude_from_capture", { enable: false }).catch(() => {});
+}
+
+/** 确保背景 <img> 已挂到面板上（无则创建） */
+function ensureBgLayer(): void {
+  if (imgEl && imgEl.parentElement === el) return;
+  if (imgEl) imgEl.remove();
+  imgEl = document.createElement("img");
+  imgEl.className = "note-bg-live";
+  imgEl.alt = "";
+  if (el) el.appendChild(imgEl);
 }
 
 /** 窗口移动/缩放时即时补拍（防抖合并），避免拖拽时背景与窗口错位 */
@@ -76,10 +102,10 @@ function scheduleCapture(): void {
   window.setTimeout(() => {
     capturePending = false;
     if (running) void captureNow();
-  }, 100);
+  }, 60);
 }
 
-/** 截取窗口背后的屏幕区域，写入背景图并套用模糊 */
+/** 截取窗口背后的屏幕区域，交给背景 <img> 显示并套用模糊 */
 async function captureNow(): Promise<void> {
   if (!running || !el || capturing) return;
   capturing = true;
@@ -99,23 +125,28 @@ async function captureNow(): Promise<void> {
       h,
       scale: 0.5,
     });
-    const bmp = await createImageBitmap(new Blob([bytes as unknown as BlobPart], { type: "image/jpeg" }));
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = bmp.width;
-      canvas.height = bmp.height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(bmp, 0, 0);
-      const url = canvas.toDataURL("image/jpeg", 0.6);
-      el.style.setProperty("--note-bg-img", `url("${url}")`);
-      el.style.setProperty("--note-bg-opacity", "1");
-      el.classList.add("has-bg");
-      if (mdTarget) {
-        mdTarget.style.setProperty("--md-bg-img", `url("${url}")`);
-      }
-    } finally {
-      bmp.close();
+    if (!running) return;
+    const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: "image/jpeg" }));
+    if (imgEl) {
+      // 上一帧 URL 在 onload 后释放（避免图片仍在解码时被回收）
+      imgEl.onload = () => {
+        if (currentUrl) URL.revokeObjectURL(currentUrl);
+        currentUrl = url;
+      };
+      imgEl.onerror = () => URL.revokeObjectURL(url);
+      imgEl.src = url;
+    } else {
+      URL.revokeObjectURL(url);
+    }
+    if (mdTarget) {
+      mdTarget.style.setProperty("--md-bg-img", `url("${url}")`);
+    }
+    // 依据背景亮度切换按钮配色（透明模式下第一行按钮跟随背景实时变亮/变暗）；
+    // 亮度采样有开销，节流到约 500ms 一次
+    const now = Date.now();
+    if (now - lastAdaptiveCheck > 500) {
+      lastAdaptiveCheck = now;
+      void applyAdaptiveColors(el, url);
     }
   } catch (e) {
     // 首帧可能在窗口尚未就绪时失败，定时器会重试
@@ -123,9 +154,4 @@ async function captureNow(): Promise<void> {
   } finally {
     capturing = false;
   }
-}
-
-/** 导出当前状态（供调试） */
-export function isRealtimeBlurRunning(): boolean {
-  return running;
 }
