@@ -1,8 +1,7 @@
 import { loadSettings, saveSettings, saveMdCustom, openFile } from "./api";
-import { ensureRealtimeBlur, stopRealtimeBlur } from "./screen-blur";
+import { applyGlassBlur } from "./glass";
 import { listen } from "@tauri-apps/api/event";
 import type { Settings } from "./types";
-import { tweenGlassBlur } from "./blur-anim";
 
 export const SHORTCUT_ACTIONS: { key: string; label: string }[] = [
   { key: "fg_color", label: "字体颜色" },
@@ -34,9 +33,6 @@ export const TARGET_LANGUAGES: { value: string; label: string }[] = [
   { value: "pt", label: "葡萄牙文" },
   { value: "ar", label: "阿拉伯文" },
 ];
-
-/** 自定义背景磨砂的最大模糊半径（px），对应强度 100% */
-export const MAX_BLUR_PX = 40;
 
 /** 把存储的毛玻璃强度统一规范为 0~100 的整数百分比。
  *  旧版本以 px（4~40）存储，这里做兼容迁移：>100 视为旧 px 值换算成百分比。 */
@@ -231,9 +227,18 @@ export async function openSettingsModal(): Promise<void> {
   const existing = document.getElementById("settings-overlay");
   if (existing) existing.remove();
 
+  // 独立“设置”窗口：面板铺满窗口、无暗色遮罩（窗口自带系统标题栏与关闭按钮）
+  let standalone = false;
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    standalone = getCurrentWindow().label === "settings";
+  } catch {
+    /* 忽略 */
+  }
+
   // 立即挂载浮层骨架
   const overlay = document.createElement("div");
-  overlay.className = "settings-overlay";
+  overlay.className = "settings-overlay" + (standalone ? " settings-standalone" : "");
   overlay.id = "settings-overlay";
   overlay.innerHTML = `
     <div class="settings-modal settings-layout">
@@ -645,16 +650,28 @@ export async function openSettingsModal(): Promise<void> {
   });
   themeSel.value = draft.theme || "light";
 
-  // 透明主题实时预览：切到/切离透明时即时启停毛玻璃循环（设置窗口无 .note-window 时仅记状态，由便签窗口 onSettingsChanged 接管）
+  // 透明主题实时预览：切到/切离透明时即时启停毛玻璃（独立设置窗口无 .note-window 时仅记状态，由便签窗口 onSettingsChanged 接管）
   function applyTransparentPreview(transparent: boolean) {
     const noteWin = document.querySelector(".note-window") as HTMLElement | null;
     if (!noteWin) return;
     if (transparent) {
       noteWin.classList.add("bg-transparent");
-      ensureRealtimeBlur(normalizeGlassPct(draft.glass_blur));
+      applyGlassBlur({
+        target: noteWin,
+        mode: "system",
+        strength: normalizeGlassPct(draft.glass_blur),
+        enabled: draft.glass_enabled !== false,
+        theme: draft.theme,
+      });
     } else {
       noteWin.classList.remove("bg-transparent");
-      stopRealtimeBlur();
+      applyGlassBlur({
+        target: noteWin,
+        mode: "system",
+        strength: 0,
+        enabled: false,
+        theme: draft.theme,
+      });
     }
   }
   themeSel.addEventListener("change", () => {
@@ -739,6 +756,8 @@ export async function openSettingsModal(): Promise<void> {
     msg.textContent = "已清除背景图。";
     msg.classList.add("ok");
   });
+  // 初始渲染时即显示已配置的背景图预览（否则重新打开设置时预览区是空白的）
+  renderBgPreview();
 
   // ---- 毛玻璃强度（0~100%，透明背景与背景图片两种模式统一）----
   const glassChk = overlay.querySelector("#set-glass") as HTMLInputElement;
@@ -747,46 +766,22 @@ export async function openSettingsModal(): Promise<void> {
   glassChk.checked = draft.glass_enabled !== false;
   glassBlurInput.value = String(normalizeGlassPct(draft.glass_blur));
 
-  // 统一套用毛玻璃强度预览（与 note.ts 中 applyGlassEnabled 使用同一套映射，所见即所得）：
-  // - 透明背景：系统 DWM 持续模糊（与焦点无关）+ 主题色半透明着色。
-  //   0%（或关闭）完全透明、直接透出桌面；100% 高度不透明、看不到轮廓。
+  // 统一套用毛玻璃强度预览（与 note.ts 中 applyGlassEnabled 走同一个工具，所见即所得）：
+  // - 透明背景：系统级 Acrylic 实时磨砂（DWM 合成，不截屏）。强度控制磨砂遮罩浓淡：
+  //   0%（或关闭）完全透明、直接透出桌面（无模糊）；100% 遮罩最淡、磨砂完全透出（模糊感最强）。
   // - 自定义背景：0% 原图无模糊，100% 强模糊（≈ MAX_BLUR_PX，几乎看不到轮廓）。
   function applyGlassLive(pct: number) {
     const p = Math.max(0, Math.min(100, Math.round(pct)));
     glassBlurVal.textContent = p + "%";
     const noteWin = document.querySelector(".note-window") as HTMLElement | null;
     if (!noteWin) return;
-    const enabled = glassChk.checked;
-    const transparent = draft.theme === "transparent";
-    if (transparent) {
-      // 透明模式：模糊由 screen-blur.ts 的 ::before(filter:blur) 提供，这里只控制模糊强度
-      const px = !enabled || p <= 0 ? 0 : 4 + (p / 100) * 16;
-      noteWin.style.setProperty("--glass-blur", px.toFixed(1) + "px");
-      return;
-    }
-    noteWin.style.removeProperty("--glass-blur");
-    if (!enabled || p <= 0) {
-      if (noteWin.classList.contains("glass")) {
-        // 关闭：平滑退到 0 再摘除 glass，避免模糊瞬间消失
-        tweenGlassBlur(noteWin, 0, {
-          onDone: () => {
-            noteWin.classList.remove("glass");
-            noteWin.style.removeProperty("--glass-blur");
-          },
-        });
-      } else {
-        noteWin.classList.remove("glass");
-        noteWin.style.removeProperty("--glass-blur");
-      }
-    } else {
-      const px = Math.round((p / 100) * MAX_BLUR_PX);
-      // 刚开启且无内联值时先归零，防止 CSS 默认 16px 闪现
-      if (!noteWin.classList.contains("glass")) {
-        noteWin.style.setProperty("--glass-blur", "0px");
-      }
-      noteWin.classList.add("glass");
-      tweenGlassBlur(noteWin, px);
-    }
+    applyGlassBlur({
+      target: noteWin,
+      mode: draft.theme === "transparent" ? "system" : "image",
+      strength: p,
+      enabled: glassChk.checked,
+      theme: draft.theme,
+    });
   }
   glassChk.addEventListener("change", () => {
     draft.glass_enabled = glassChk.checked;
@@ -924,9 +919,17 @@ export async function openSettingsModal(): Promise<void> {
   });
 
   // ---- 关闭 ----
-  function close() {
+  async function close() {
     recCleanup.forEach((fn) => fn());
     overlay.remove();
+    // 设置面板运行在独立“设置”窗口里：关闭面板即关闭窗口
+    // （后端 close_window 对 settings 标签真正销毁窗口，对便签窗口只是隐藏）。
+    try {
+      const { closeWindow } = await import("./api");
+      await closeWindow();
+    } catch (e) {
+      console.error("关闭设置窗口失败:", e);
+    }
   }
   (overlay.querySelector("#set-close") as HTMLButtonElement).addEventListener("click", close);
   overlay.addEventListener("mousedown", (e) => {

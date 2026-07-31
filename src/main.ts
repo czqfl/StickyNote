@@ -1,6 +1,7 @@
 import "./styles.css";
 import { mountNoteApp } from "./note";
 import { mountHistoryApp } from "./history";
+import { openSettingsModal } from "./settings";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // 全局错误兜底：任何未捕获异常都显示出来，避免静默空白/卡死难以排查。
@@ -32,6 +33,10 @@ const preset = params.get("preset") || "";
 
 if (label === "history") {
   mountHistoryApp();
+} else if (label === "settings") {
+  // 独立“设置”窗口：只渲染设置面板本身（不再挂便签应用，
+  // 避免之前“设置窗口一片白 / 关不掉 / 便签按钮失灵”的问题）。
+  openSettingsModal().catch((e) => console.error("设置面板加载失败:", e));
 } else {
   mountNoteApp(noteId, preset);
 }

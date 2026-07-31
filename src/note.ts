@@ -14,13 +14,13 @@ import {
   readMdCustom,
   saveSettings,
   formatWithLLM,
+  openSettingsWindow,
 } from "./api";
-import { ensureRealtimeBlur, stopRealtimeBlur } from "./screen-blur";
 import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
 import { requestBlackHoleClose } from "./blackhole";
-import { tweenGlassBlur } from "./blur-anim";
+import { applyGlassBlur } from "./glass";
 import {
   getCurrentWindow,
   PhysicalPosition,
@@ -35,8 +35,6 @@ import {
   setSettings,
   TARGET_LANGUAGES,
   normalizeGlassPct,
-  MAX_BLUR_PX,
-  openSettingsModal,
 } from "./settings";
 
 const SAVE_DELAY = 500;
@@ -353,13 +351,16 @@ export function mountNoteApp(noteId: string, preset = "") {
       console.error("加载便签失败:", err);
       updatePin(true, false);
     }
-    // 仅在“打开中”集合里的便签才展示；从托盘/快捷键呼出时由后端统一呼出仍在打开的便签
-    try {
-      const open = await getOpenNotes();
-      if (open.includes(noteId)) await getCurrentWindow().show();
-      else await getCurrentWindow().hide();
-    } catch (e) {
-      console.error("读取打开状态失败:", e);
+    // 便签窗口按“打开中”集合显隐；main 主窗由后端启动流程（show_all_open）统一决定，
+    // 不在前端自行 show——否则启动时会与默认便签同时出现两个窗口。
+    if (noteId !== "main") {
+      try {
+        const open = await getOpenNotes();
+        if (open.includes(noteId)) await getCurrentWindow().show();
+        else await getCurrentWindow().hide();
+      } catch (e) {
+        console.error("读取打开状态失败:", e);
+      }
     }
     applyTranslateVisibility();
     applyMdMode();
@@ -422,18 +423,30 @@ export function mountNoteApp(noteId: string, preset = "") {
     const pct = normalizeGlassPct(s.glass_blur);
 
     if (transparent) {
-      // 透明模式：系统级高斯模糊（Acrylic），零延迟零错位
+      // 透明模式：系统级磨砂（DWM 合成，零截屏零延迟）
       noteWindow.classList.remove("has-bg", "bg-immersive", "bg-wallpaper");
       noteWindow.classList.add("bg-transparent");
       noteWindow.style.removeProperty("--note-bg-img");
       noteWindow.style.removeProperty("--note-bg-opacity");
       noteWindow.style.removeProperty("--note-panel-alpha");
       noteWindow.style.removeProperty("--note-bar-alpha");
-      ensureRealtimeBlur(pct);
+      applyGlassBlur({
+        target: noteWindow,
+        mode: "system",
+        strength: pct,
+        enabled: s.glass_enabled !== false,
+        theme: s.theme,
+      });
       return;
     }
-    // 非透明：停止模糊并清掉透明态
-    stopRealtimeBlur();
+    // 非透明：停止系统磨砂并清掉透明态
+    applyGlassBlur({
+      target: noteWindow,
+      mode: "system",
+      strength: 0,
+      enabled: false,
+      theme: s.theme,
+    });
     noteWindow.classList.remove("bg-transparent", "bg-wallpaper");
     clearGlassValues(noteWindow);
 
@@ -457,43 +470,19 @@ export function mountNoteApp(noteId: string, preset = "") {
     noteWindow.classList.toggle("bg-immersive", immersive);
   }
 
-  /** 统一套用毛玻璃强度（0~100%）：透明背景磨砂桌面、自定义背景磨砂图片，两种模式通用。
-   *  - 透明背景：原生 Acrylic 负责模糊（系统级、强度固定），此处只调节面板“透出程度”：
-   *    0% 关闭 Acrylic 且面板接近不透明（完全不用毛玻璃）；100% 面板高度透明（几乎看不到背景轮廓）。
-   *  - 自定义背景：0% 原图无模糊；100% 强模糊（≈ MAX_BLUR_PX，几乎看不到轮廓）。 */
+  /** 统一套用毛玻璃强度（0~100%）：透明背景与自定义背景两种模式走同一个工具。 */
   async function applyGlassEnabled(): Promise<void> {
     const s = await getSettings();
     const enabled = s.glass_enabled !== false;
     const pct = normalizeGlassPct(s.glass_blur);
     const transparent = s.theme === "transparent";
-    if (transparent) {
-      // 透明模式：系统级高斯模糊（Acrylic），零延迟零错位
-      ensureRealtimeBlur(pct);
-      return;
-    }
-    noteWindow.style.removeProperty("--glass-blur");
-    if (!enabled || pct <= 0) {
-      if (noteWindow.classList.contains("glass")) {
-        // 关闭：先平滑退到 0 再摘除 glass，避免模糊瞬间消失的跳变
-        tweenGlassBlur(noteWindow, 0, {
-          onDone: () => {
-            noteWindow.classList.remove("glass");
-            noteWindow.style.removeProperty("--glass-blur");
-          },
-        });
-      } else {
-        noteWindow.classList.remove("glass");
-        noteWindow.style.removeProperty("--glass-blur");
-      }
-    } else {
-      const px = Math.round((pct / 100) * MAX_BLUR_PX);
-      // 刚开启且无内联值时先归零，防止 CSS 默认 16px 闪现后再动画
-      if (!noteWindow.classList.contains("glass")) {
-        noteWindow.style.setProperty("--glass-blur", "0px");
-      }
-      noteWindow.classList.add("glass");
-      tweenGlassBlur(noteWindow, px);
-    }
+    applyGlassBlur({
+      target: noteWindow,
+      mode: transparent ? "system" : "image",
+      strength: pct,
+      enabled,
+      theme: s.theme,
+    });
   }
 
   function scheduleSave() {
@@ -1681,7 +1670,7 @@ export function mountNoteApp(noteId: string, preset = "") {
   // ---- 按钮事件 ----
 
   btnSettings.addEventListener("click", () => {
-    openSettingsModal().catch((e) => console.error("打开设置失败:", e));
+    openSettingsWindow().catch((e) => console.error("打开设置窗口失败:", e));
   });
 
   btnPin.addEventListener("click", () => updatePin(!current.pinned));

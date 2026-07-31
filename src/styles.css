@@ -90,11 +90,14 @@ body,
   overflow: hidden;
 }
 
-/* 标题栏居中拖动抓手：作为弹性占位元素夹在左右按钮组之间，
-   永远居中且绝不与左右按钮重叠（不再用绝对定位压住按钮） */
+/* 标题栏居中拖动抓手：绝对定位锚在标题栏水平中点，缩窄便签宽度时抓取区域始终居中；
+   层级置于左右按钮组之下（z-index 1 < 3），绝不遮挡按钮/标题的点击 */
 .titlebar-grip {
-  flex: 1 1 auto;
-  min-width: 24px;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90px;
   height: 100%;
   display: flex;
   align-items: center;
@@ -384,9 +387,10 @@ body,
   position: relative;
   z-index: 3;
 }
-/* 透明主题：除字体控件（颜色/字号）外，所有面板/按钮容器改为完全透明 +
-   背景毛玻璃模糊，让实时玻璃背景透出，呈现统一磨砂质感；
-   字体颜色/字号控件保持可见底色与边框，便于选色与选字号 */
+/* 透明主题：除字体控件（颜色/字号）外，所有面板/按钮容器改为完全透明，
+   让系统级 Acrylic 磨砂背景直接透出，呈现统一磨砂质感；
+   字体颜色/字号控件保持可见底色与边框，便于选色与选字号。
+   模糊由系统合成层实时完成（零截屏零延迟），网页侧不再叠加任何 filter/backdrop-filter */
 .note-window.bg-transparent .titlebar,
 .note-window.bg-transparent .toolbar,
 .note-window.bg-transparent .translate-panel,
@@ -396,7 +400,7 @@ body,
 .note-window.bg-transparent .translate-dst {
   background: transparent;
   border-color: rgba(255, 255, 255, 0.16);
-  /* 不再用 backdrop-filter：canvas 底图本身已模糊，控件纯透明叠上去即可，
+  /* 不叠加 backdrop-filter：Acrylic 由 DWM 提供，控件纯透明叠上去即可，
      避免每个控件各自做一遍 GPU 模糊合成（拖动时每帧重算 → 卡顿主因） */
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }

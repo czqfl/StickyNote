@@ -1324,23 +1324,31 @@ fn dispatch_shortcut(app: &AppHandle, id: u32) {
 
 /// “全部关闭”：按 blackhole_close 配置决定行为。
 /// - 启用：向每个可见便签窗口广播 play-close-anim，由各窗口自行播放黑洞吸入动画后再关闭（前端处理）。
-/// - 未启用：直接把所有窗口隐藏到托盘（保留进程，可再次呼出）。
+/// - 未启用：直接把所有便签窗口隐藏到托盘（保留进程，可再次呼出）。
+/// 辅助窗口（设置/历史）不受影响。
 fn close_all_with_anim(app: &AppHandle, settings: &Settings) {
     if settings.blackhole_close {
         for (_label, win) in app.webview_windows() {
-            if win.is_visible().unwrap_or(false) {
-                let _ = win.emit("play-close-anim", ());
+            if !win.is_visible().unwrap_or(false) {
+                continue;
             }
+            if matches!(win.label(), "settings" | "history") {
+                continue;
+            }
+            let _ = win.emit("play-close-anim", ());
         }
     } else {
         let _ = close_all_notes(app.clone());
     }
 }
 
-/// “全部关闭”：把所有便签窗口隐藏到托盘（保留进程，可再次呼出）。
+/// “全部关闭”：把所有便签窗口隐藏到托盘（保留进程，可再次呼出）。辅助窗口不受影响。
 #[tauri::command]
 fn close_all_notes(app: AppHandle) -> Result<(), String> {
     for (_label, win) in app.webview_windows() {
+        if matches!(win.label(), "settings" | "history") {
+            continue;
+        }
         let _ = win.hide();
     }
     Ok(())
@@ -1793,6 +1801,90 @@ fn set_exclude_from_capture(window: tauri::WebviewWindow, enable: bool) -> Resul
     }
 }
 
+/// 系统级磨砂（Acrylic）：通过 SetWindowCompositionAttribute 直接设置
+/// ACCENT_ENABLE_ACRYLICBLURBEHIND，让 Windows 在系统合成层实时模糊窗口背后的内容
+/// （包括桌面、其它窗口及其动画），零截屏、零延迟、零错位、不占前端性能。
+///
+/// 为什么不走 Tauri 内置 setEffects：
+///  - 内置 blur（Blurbehind）叠加在透明窗口上会渲染成一片黑（此前"透明背景一片黑"的根因）；
+///  - 内置 acrylic 在 Win11 22H2+ 会被路由到 DWM 的 DWMSBT_TRANSIENTWINDOW，对透明窗口不生效。
+/// SWCA 的 acrylic 在 Win10 / Win11 的透明窗口上均稳定生效（TranslucentTB 同款方案）。
+///
+/// DWM 磨砂半径固定不可调，强度通过 tint 的 alpha 表达：强度越低遮罩越不透明
+/// （磨砂被盖住、观感接近不模糊），强度越高遮罩越淡（磨砂完全透出、模糊感越强）。
+/// tint = [r, g, b, a]，0~255。
+#[tauri::command]
+fn set_window_blur(window: tauri::WebviewWindow, enabled: bool, tint: [u8; 4]) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::c_void;
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+
+        const WCA_ACCENT_POLICY: i32 = 19;
+        const ACCENT_DISABLED: i32 = 0;
+        const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
+
+        #[repr(C)]
+        struct AccentPolicy {
+            accent_state: i32,
+            accent_flags: i32,
+            gradient_color: u32,
+            animation_id: i32,
+        }
+        #[repr(C)]
+        struct WindowCompositionAttribData {
+            attribute: i32,
+            data: *mut c_void,
+            size_of_data: usize,
+        }
+
+        unsafe {
+            // SetWindowCompositionAttribute 是未文档化 API，windows-sys 不含它，动态加载
+            let module = LoadLibraryA(b"user32.dll\0".as_ptr());
+            if module.is_null() {
+                return Ok(());
+            }
+            let proc = GetProcAddress(module, b"SetWindowCompositionAttribute\0".as_ptr());
+            let Some(func) = proc else {
+                return Ok(());
+            };
+            let set_wca: unsafe extern "system" fn(HWND, *mut WindowCompositionAttribData) -> i32 =
+                std::mem::transmute(func);
+
+            let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+            let raw_hwnd: HWND = hwnd.0 as _;
+
+            let mut policy = AccentPolicy {
+                accent_state: if enabled { ACCENT_ENABLE_ACRYLICBLURBEHIND } else { ACCENT_DISABLED },
+                accent_flags: 0,
+                // DWM 期望 0xAABBGGRR 排列
+                gradient_color: (tint[0] as u32)
+                    | ((tint[1] as u32) << 8)
+                    | ((tint[2] as u32) << 16)
+                    | ((tint[3] as u32) << 24),
+                animation_id: 0,
+            };
+            // acrylic 不接受 alpha 为 0 的遮罩色（会整体失效），至少给 1
+            if enabled && tint[3] == 0 {
+                policy.gradient_color |= 1 << 24;
+            }
+            let mut data = WindowCompositionAttribData {
+                attribute: WCA_ACCENT_POLICY,
+                data: &mut policy as *mut _ as *mut c_void,
+                size_of_data: std::mem::size_of::<AccentPolicy>(),
+            };
+            set_wca(raw_hwnd, &mut data);
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, enabled, tint);
+        Ok(())
+    }
+}
+
 /// 打开独立的“设置”窗口：与便签窗口解耦，自带固定初始尺寸，不再受便签视窗大小限制。
 /// 若窗口已存在则聚焦到它（避免重复打开）。
 #[tauri::command]
@@ -1941,6 +2033,7 @@ fn main() {
             get_wallpaper,
             capture_screen_region,
             set_exclude_from_capture,
+            set_window_blur,
             open_settings_window,
         ])
         .run(tauri::generate_context!())
