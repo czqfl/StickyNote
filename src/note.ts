@@ -51,6 +51,43 @@ const ICON_MAX = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" st
 // 还原（已最大化时显示）：两个重叠方框
 const ICON_RESTORE = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>`;
 
+// 桌面壁纸 → 压缩后的 data URL（透明主题把壁纸当背景图用，与自定义背景图片同一条模糊管线）。
+// 壁纸可能 4K+，先压到最长边 1920 的 JPEG，避免超大 data URL 拖垮渲染；进程内缓存一份。
+let wallpaperDataUrlCache: Promise<string> | null = null;
+function getWallpaperDataUrl(): Promise<string> {
+  if (wallpaperDataUrlCache) return wallpaperDataUrlCache;
+  wallpaperDataUrlCache = (async () => {
+    try {
+      const { getWallpaper, readBgImage } = await import("./api");
+      const wp = await getWallpaper();
+      if (!wp) return "";
+      const dataUrl = await readBgImage(wp);
+      if (!dataUrl || !dataUrl.startsWith("data:")) return "";
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("壁纸解码失败"));
+        img.src = dataUrl;
+      });
+      const maxEdge = 1920;
+      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return "";
+      ctx.drawImage(img, 0, 0, w, h);
+      return canvas.toDataURL("image/jpeg", 0.82);
+    } catch (e) {
+      console.warn("读取桌面壁纸失败:", e);
+      return "";
+    }
+  })();
+  return wallpaperDataUrlCache;
+}
+
 export function mountNoteApp(noteId: string, preset = "") {
   const app = document.getElementById("app")!;
   app.innerHTML = `
@@ -423,30 +460,26 @@ export function mountNoteApp(noteId: string, preset = "") {
     const pct = normalizeGlassPct(s.glass_blur);
 
     if (transparent) {
-      // 透明模式：系统级磨砂（DWM 合成，零截屏零延迟）
-      noteWindow.classList.remove("has-bg", "bg-immersive", "bg-wallpaper");
+      // 透明主题：把桌面壁纸当作背景图，与「自定义背景图片」走完全相同的模糊管线
+      // （CSS blur，无任何 tint/蒙版）。面板保持透明（.bg-transparent 样式）。
+      noteWindow.classList.remove("bg-immersive", "bg-wallpaper");
       noteWindow.classList.add("bg-transparent");
-      noteWindow.style.removeProperty("--note-bg-img");
-      noteWindow.style.removeProperty("--note-bg-opacity");
       noteWindow.style.removeProperty("--note-panel-alpha");
       noteWindow.style.removeProperty("--note-bar-alpha");
-      applyGlassBlur({
-        target: noteWindow,
-        mode: "system",
-        strength: pct,
-        enabled: s.glass_enabled !== false,
-        theme: s.theme,
-      });
+      const wp = await getWallpaperDataUrl();
+      if (wp) {
+        noteWindow.style.setProperty("--note-bg-img", `url("${wp}")`);
+        noteWindow.style.setProperty("--note-bg-opacity", "1");
+        noteWindow.classList.add("has-bg");
+      } else {
+        noteWindow.style.removeProperty("--note-bg-img");
+        noteWindow.style.removeProperty("--note-bg-opacity");
+        noteWindow.classList.remove("has-bg");
+      }
+      applyGlassBlur({ target: noteWindow, strength: pct, enabled: s.glass_enabled !== false });
       return;
     }
-    // 非透明：停止系统磨砂并清掉透明态
-    applyGlassBlur({
-      target: noteWindow,
-      mode: "system",
-      strength: 0,
-      enabled: false,
-      theme: s.theme,
-    });
+    // 非透明：清掉透明态
     noteWindow.classList.remove("bg-transparent", "bg-wallpaper");
     clearGlassValues(noteWindow);
 
@@ -470,18 +503,13 @@ export function mountNoteApp(noteId: string, preset = "") {
     noteWindow.classList.toggle("bg-immersive", immersive);
   }
 
-  /** 统一套用毛玻璃强度（0~100%）：透明背景与自定义背景两种模式走同一个工具。 */
+  /** 统一套用毛玻璃强度（0~100%）：透明主题与自定义背景两种模式走同一个工具（同为 CSS 模糊）。 */
   async function applyGlassEnabled(): Promise<void> {
     const s = await getSettings();
-    const enabled = s.glass_enabled !== false;
-    const pct = normalizeGlassPct(s.glass_blur);
-    const transparent = s.theme === "transparent";
     applyGlassBlur({
       target: noteWindow,
-      mode: transparent ? "system" : "image",
-      strength: pct,
-      enabled,
-      theme: s.theme,
+      strength: normalizeGlassPct(s.glass_blur),
+      enabled: s.glass_enabled !== false,
     });
   }
 
@@ -996,16 +1024,17 @@ export function mountNoteApp(noteId: string, preset = "") {
     applyMdBackground();
   }
 
-  /** 为 Markdown 预览区套用与便签输入区统一的背景图（毛玻璃）。透明背景模式下不显示背景图。 */
+  /** 为 Markdown 预览区套用与便签输入区统一的背景图（毛玻璃）。透明主题用壁纸，与输入区一致。 */
   async function applyMdBackground() {
     const s = await getSettings();
     const doc = ensurePreviewDoc();
     if (!doc) return;
+    let bg = "";
     if (s.theme === "transparent") {
-      doc.body.classList.remove("has-bg-img");
-      return;
+      bg = await getWallpaperDataUrl();
+    } else {
+      bg = await resolveBgImage(s);
     }
-    const bg = await resolveBgImage(s);
     if (bg) {
       doc.body.classList.add("has-bg-img");
       doc.body.style.setProperty("--md-bg-img", `url("${bg}")`);

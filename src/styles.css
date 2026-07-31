@@ -372,12 +372,12 @@ body,
   background: transparent;
 }
 
-/* ===== 透明背景：便签整体沉浸式透明，系统级高斯模糊（Acrylic）===== */
-/* 核心：整窗透明，背后屏幕由 Windows 系统级 Acrylic 实时模糊，零延迟零错位。
-   控件只盖一层很淡的"薄雾"（color-mix 取主题 --bg-bar 约 28% + 透明），
-   不发黑、与浅/深主题都协调；文字加投影提升对比度。 */
+/* ===== 透明主题：桌面壁纸做背景 + CSS 高斯模糊（与自定义背景图片同一管线）===== */
+/* 核心：透明主题把桌面壁纸当背景图画在便签上（.has-bg），毛玻璃强度就是 CSS 模糊半径，
+   与「自定义背景图片」完全一致——纯背景图 + 纯模糊，没有任何色罩/蒙版（弃用系统 Acrylic，
+   其自带 tint 正是“白蒙版”来源）。面板全部透明，文字加投影保证对比度。 */
 .note-window.bg-transparent {
-  background: transparent; /* 让背后截屏透出 */
+  background: transparent;
   box-shadow:
     0 12px 40px rgba(0, 0, 0, 0.18),
     inset 0 0 0 1px rgba(255, 255, 255, 0.14);
@@ -388,9 +388,8 @@ body,
   z-index: 3;
 }
 /* 透明主题：除字体控件（颜色/字号）外，所有面板/按钮容器改为完全透明，
-   让系统级 Acrylic 磨砂背景直接透出，呈现统一磨砂质感；
-   字体颜色/字号控件保持可见底色与边框，便于选色与选字号。
-   模糊由系统合成层实时完成（零截屏零延迟），网页侧不再叠加任何 filter/backdrop-filter */
+   让模糊后的壁纸背景直接透出；字体颜色/字号控件保持可见底色与边框，便于选色与选字号。
+   模糊由背景图的 CSS filter 完成（GPU 合成），网页侧不叠加任何 backdrop-filter */
 .note-window.bg-transparent .titlebar,
 .note-window.bg-transparent .toolbar,
 .note-window.bg-transparent .translate-panel,
@@ -1601,6 +1600,8 @@ body,
 /* ===== 设置弹窗：左侧菜单 + 右侧内容 两栏布局 ===== */
 .settings-layout-body {
   display: flex;
+  flex: 1;
+  min-height: 0;
   padding: 0;
   overflow: hidden;
 }

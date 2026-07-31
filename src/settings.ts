@@ -654,25 +654,12 @@ export async function openSettingsModal(): Promise<void> {
   function applyTransparentPreview(transparent: boolean) {
     const noteWin = document.querySelector(".note-window") as HTMLElement | null;
     if (!noteWin) return;
-    if (transparent) {
-      noteWin.classList.add("bg-transparent");
-      applyGlassBlur({
-        target: noteWin,
-        mode: "system",
-        strength: normalizeGlassPct(draft.glass_blur),
-        enabled: draft.glass_enabled !== false,
-        theme: draft.theme,
-      });
-    } else {
-      noteWin.classList.remove("bg-transparent");
-      applyGlassBlur({
-        target: noteWin,
-        mode: "system",
-        strength: 0,
-        enabled: false,
-        theme: draft.theme,
-      });
-    }
+    noteWin.classList.toggle("bg-transparent", transparent);
+    applyGlassBlur({
+      target: noteWin,
+      strength: normalizeGlassPct(draft.glass_blur),
+      enabled: transparent && draft.glass_enabled !== false,
+    });
   }
   themeSel.addEventListener("change", () => {
     updateThemePreview(themeSel.value);
@@ -767,9 +754,8 @@ export async function openSettingsModal(): Promise<void> {
   glassBlurInput.value = String(normalizeGlassPct(draft.glass_blur));
 
   // 统一套用毛玻璃强度预览（与 note.ts 中 applyGlassEnabled 走同一个工具，所见即所得）：
-  // - 透明背景：系统级 Acrylic 实时磨砂（DWM 合成，不截屏）。强度控制磨砂遮罩浓淡：
-  //   0%（或关闭）完全透明、直接透出桌面（无模糊）；100% 遮罩最淡、磨砂完全透出（模糊感最强）。
-  // - 自定义背景：0% 原图无模糊，100% 强模糊（≈ MAX_BLUR_PX，几乎看不到轮廓）。
+  // 透明主题与自定义背景图片完全同一条管线：0% 原图无模糊，100% 强模糊（≈ MAX_BLUR_PX），
+  // 无任何色罩/蒙版。
   function applyGlassLive(pct: number) {
     const p = Math.max(0, Math.min(100, Math.round(pct)));
     glassBlurVal.textContent = p + "%";
@@ -777,10 +763,8 @@ export async function openSettingsModal(): Promise<void> {
     if (!noteWin) return;
     applyGlassBlur({
       target: noteWin,
-      mode: draft.theme === "transparent" ? "system" : "image",
       strength: p,
       enabled: glassChk.checked,
-      theme: draft.theme,
     });
   }
   glassChk.addEventListener("change", () => {

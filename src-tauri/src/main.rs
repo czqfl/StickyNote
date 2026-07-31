@@ -610,6 +610,7 @@ fn save_bg_image(data_url: String, key: String) -> Result<String, String> {
 }
 
 /// 读取背景图文件，返回 data URL（供前端套到 CSS 背景）。文件不存在/无法读取时返回错误。
+/// 支持无扩展名文件（如 Windows 的 TranscodedWallpaper）：按文件头魔数嗅探真实格式。
 #[tauri::command]
 fn read_bg_image(path: String) -> Result<String, String> {
     let p = std::path::Path::new(&path);
@@ -620,12 +621,31 @@ fn read_bg_image(path: String) -> Result<String, String> {
     let ext = p
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or("png")
+        .unwrap_or("")
         .to_lowercase();
     let mime = match ext.as_str() {
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
-        _ => "image/png",
+        "png" => "image/png",
+        // 无扩展名（如 TranscodedWallpaper）：按魔数嗅探，避免把 JPEG 内容标成 png 导致解码失败
+        _ => {
+            if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                "image/jpeg"
+            } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                "image/png"
+            } else if bytes.starts_with(b"RIFF")
+                && bytes.len() > 12
+                && &bytes[8..12] == b"WEBP"
+            {
+                "image/webp"
+            } else if bytes.starts_with(b"BM") {
+                "image/bmp"
+            } else if bytes.starts_with(b"GIF8") {
+                "image/gif"
+            } else {
+                "image/png"
+            }
+        }
     };
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:{};base64,{}", mime, b64))
@@ -1801,92 +1821,8 @@ fn set_exclude_from_capture(window: tauri::WebviewWindow, enable: bool) -> Resul
     }
 }
 
-/// 系统级磨砂（Acrylic）：通过 SetWindowCompositionAttribute 直接设置
-/// ACCENT_ENABLE_ACRYLICBLURBEHIND，让 Windows 在系统合成层实时模糊窗口背后的内容
-/// （包括桌面、其它窗口及其动画），零截屏、零延迟、零错位、不占前端性能。
-///
-/// 为什么不走 Tauri 内置 setEffects：
-///  - 内置 blur（Blurbehind）叠加在透明窗口上会渲染成一片黑（此前"透明背景一片黑"的根因）；
-///  - 内置 acrylic 在 Win11 22H2+ 会被路由到 DWM 的 DWMSBT_TRANSIENTWINDOW，对透明窗口不生效。
-/// SWCA 的 acrylic 在 Win10 / Win11 的透明窗口上均稳定生效（TranslucentTB 同款方案）。
-///
-/// DWM 磨砂半径固定不可调，强度通过 tint 的 alpha 表达：强度越低遮罩越不透明
-/// （磨砂被盖住、观感接近不模糊），强度越高遮罩越淡（磨砂完全透出、模糊感越强）。
-/// tint = [r, g, b, a]，0~255。
-#[tauri::command]
-fn set_window_blur(window: tauri::WebviewWindow, enabled: bool, tint: [u8; 4]) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::ffi::c_void;
-        use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
-
-        const WCA_ACCENT_POLICY: i32 = 19;
-        const ACCENT_DISABLED: i32 = 0;
-        const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
-
-        #[repr(C)]
-        struct AccentPolicy {
-            accent_state: i32,
-            accent_flags: i32,
-            gradient_color: u32,
-            animation_id: i32,
-        }
-        #[repr(C)]
-        struct WindowCompositionAttribData {
-            attribute: i32,
-            data: *mut c_void,
-            size_of_data: usize,
-        }
-
-        unsafe {
-            // SetWindowCompositionAttribute 是未文档化 API，windows-sys 不含它，动态加载
-            let module = LoadLibraryA(b"user32.dll\0".as_ptr());
-            if module.is_null() {
-                return Ok(());
-            }
-            let proc = GetProcAddress(module, b"SetWindowCompositionAttribute\0".as_ptr());
-            let Some(func) = proc else {
-                return Ok(());
-            };
-            let set_wca: unsafe extern "system" fn(HWND, *mut WindowCompositionAttribData) -> i32 =
-                std::mem::transmute(func);
-
-            let hwnd = window.hwnd().map_err(|e| e.to_string())?;
-            let raw_hwnd: HWND = hwnd.0 as _;
-
-            let mut policy = AccentPolicy {
-                accent_state: if enabled { ACCENT_ENABLE_ACRYLICBLURBEHIND } else { ACCENT_DISABLED },
-                accent_flags: 0,
-                // DWM 期望 0xAABBGGRR 排列
-                gradient_color: (tint[0] as u32)
-                    | ((tint[1] as u32) << 8)
-                    | ((tint[2] as u32) << 16)
-                    | ((tint[3] as u32) << 24),
-                animation_id: 0,
-            };
-            // acrylic 不接受 alpha 为 0 的遮罩色（会整体失效），至少给 1
-            if enabled && tint[3] == 0 {
-                policy.gradient_color |= 1 << 24;
-            }
-            let mut data = WindowCompositionAttribData {
-                attribute: WCA_ACCENT_POLICY,
-                data: &mut policy as *mut _ as *mut c_void,
-                size_of_data: std::mem::size_of::<AccentPolicy>(),
-            };
-            set_wca(raw_hwnd, &mut data);
-        }
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (window, enabled, tint);
-        Ok(())
-    }
-}
-
 /// 打开独立的“设置”窗口：与便签窗口解耦，自带固定初始尺寸，不再受便签视窗大小限制。
-/// 若窗口已存在则聚焦到它（避免重复打开）。
+/// 若窗口已存在则聚焦到它（避免重复打开）。加载专用页面 settings.html（只渲染设置面板）。
 #[tauri::command]
 fn open_settings_window(app: AppHandle) -> Result<(), String> {
     use tauri::WebviewUrl;
@@ -1908,7 +1844,7 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
             (px.max(0.0), py.max(0.0))
         })
         .unwrap_or((200.0, 200.0));
-    tauri::WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("index.html".into()))
+    tauri::WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("便签设置")
         .decorations(true)
         .resizable(true)
@@ -2033,7 +1969,6 @@ fn main() {
             get_wallpaper,
             capture_screen_region,
             set_exclude_from_capture,
-            set_window_blur,
             open_settings_window,
         ])
         .run(tauri::generate_context!())

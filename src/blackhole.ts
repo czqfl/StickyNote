@@ -3,15 +3,15 @@
 // 触发：用户通过快捷键（或标题栏关闭按钮）关闭窗口时，先播放本动画，结束后再真正关闭。
 //
 // 实现要点：
-// 1) 内容形变（流体扭曲 + 螺旋吸入）
-//    - 对 .note-window 施加 SVG feDisplacementMap（湍流噪声），随时间增强位移尺度，
-//      使窗口像素产生“流体般”的扭曲，而非简单的缩放。
-//    - 配合 CSS transform 做“旋转 + 缩放”向几何中心螺旋收缩，模拟引力透镜下的坠入。
-// 2) 黑洞视觉（Canvas2D 覆盖层）
-//    - 深色吸积核心（吞噬区）随时间扩张直至覆盖整个窗口；
-//    - 亮色“光子环”（Einstein ring）勾勒事件视界；
-//    - 暖色辉光外晕 + 旋转吸积盘臂，营造《星际穿越》式的时空扭曲与吸积盘质感。
-// 3) 动画时长约 1s。
+// 1) 中心小黑洞：窗口中央快速“弹出”一个小黑洞（直径 ≈ 便签最短边的一半，不扩张至整窗），
+//    由暖色辉光 + 旋转吸积盘臂 + 暗核 + 光子环组成（Canvas2D 覆盖层绘制）。
+// 2) 内容旋转扭曲吸入：.note-window 沿中心旋转约两圈并收缩至消失（向洞心坠入），
+//    同时 SVG feDisplacementMap（湍流噪声）位移尺度随接近黑洞而增强，产生流体扭曲感；
+//    吸收完成瞬间光子环向外迸发一圈闪光。
+// 3) 动画时长约 0.75s；内容被吸尽即真正关闭，绝无“吸完空等”。
+//
+// 【性能】黑洞半径小 → Canvas 绘制范围小、shadowBlur 封顶；湍流噪声固定 baseFrequency、
+// 只改位移 scale（避免每帧重算噪声位图）；内容变换用 will-change 提升为 GPU 合成层。
 //
 // 【关键可靠性修复】早期版本用 requestAnimationFrame 驱动，但当动画由“全部关闭”全局
 // 快捷键触发、而便签窗口处于后台（非前台聚焦）时，浏览器/系统会节流甚至暂停该 webview
@@ -151,14 +151,19 @@ function playBlackHole(root: HTMLElement, onDone: () => void): void {
   }
   ctx.scale(dpr, dpr);
 
-  // 覆盖窗口四角所需的最大半径（略大于半对角线）
-  const maxR = (Math.hypot(w, h) / 2) * 1.08;
-  // 整体提速：约 0.65s 完成吸入；暗核铺满全屏的“那一刻”立即真正关闭窗口，
-  // 杜绝“变黑后还停顿一下才关”。（旧版 1s 且须跑到 t=1 才关，故有约 1s 拖尾观感。）
-  const duration = 650;
+  // 黑洞最终直径 = 便签最短边的一半（半径 = 最短边 1/4），保持“中心小黑洞”观感，
+  // 不扩张至整个便签；内容被旋转扭曲吸入洞中。
+  const holeR = Math.max(24, Math.min(w, h) / 4);
+  const duration = 750;
   const start = performance.now();
 
   const easeInCubic = (x: number) => x * x * x;
+  // 黑洞快速出现：0→1 带轻微回弹（弹出感）
+  const easeOutBack = (x: number) => {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  };
 
   let raf = 0;
   const cleanup = () => {
@@ -166,6 +171,7 @@ function playBlackHole(root: HTMLElement, onDone: () => void): void {
     try {
       root.style.transform = "";
       root.style.filter = "";
+      root.style.willChange = "";
     } catch {
       /* ignore */
     }
@@ -181,32 +187,29 @@ function playBlackHole(root: HTMLElement, onDone: () => void): void {
 
   const frame = (now: number) => {
     const t = Math.min(1, (now - start) / duration);
-    const e = easeInCubic(t); // 加速坠入
-    const shrink = 1 - easeInCubic(Math.min(1, t * 1.05)) * 0.985; // 内容缩至极小
-    const rot = e * 600; // 螺旋旋转角（度）
-
-    // 流体扭曲：只随时间增强位移尺度。
-    // 【性能】不要逐帧改 baseFrequency——那会让浏览器每帧重新生成整窗湍流噪声位图
-    // （feTurbulence 是 CPU 光栅化，全窗口重算一次要几十毫秒），是关闭动画掉帧的元凶；
-    // 固定噪声、只改 scale 则仅做位移采样，代价低得多。
+    const e = easeInCubic(t); // 坠入感加速
+    // 黑洞在前 15% 时间快速弹出到最终大小，之后保持小洞
+    const appear = easeOutBack(Math.min(1, t / 0.15));
+    // 内容螺旋吸入：旋转两圈 + 向中心收缩（先慢后快）；扭曲随接近黑洞增强
+    const rot = e * 720;
+    const scale = Math.pow(Math.max(0, 1 - e), 1.35);
     if (turb && disp) {
-      disp.setAttribute("scale", (e * 42).toFixed(2));
+      // 【性能】只改位移尺度，不动 baseFrequency（固定湍流噪声位图，避免每帧重算）
+      disp.setAttribute("scale", (e * 60).toFixed(2));
     }
-    // 内容螺旋收缩
     root.style.transformOrigin = "50% 50%";
-    root.style.transform = `rotate(${rot}deg) scale(${shrink})`;
+    root.style.transform = `rotate(${rot}deg) scale(${scale.toFixed(4)})`;
     root.style.filter = "url(#bh-warp)";
 
-    drawBlackHole(ctx, w, h, t, maxR);
+    drawBlackHole(ctx, w, h, t, holeR * Math.max(0, appear));
 
-    // 暗核已铺满全屏：立刻真正关闭窗口（黑幕掩护下），绝不“变黑后空等”
-    const darkR = maxR * easeOutCubicLocal(Math.min(1, t * 1.18));
-    if (darkR >= maxR * 0.999 || t >= 1) {
-      drawBlackHole(ctx, w, h, 1, maxR);
+    // 内容已被完全吸入：立刻真正关闭窗口（黑幕/闪光掩护下），绝不“吸完后空等”
+    if (scale < 0.015 || t >= 1) {
+      drawBlackHole(ctx, w, h, 1, holeR);
       try {
         onDone();
       } finally {
-        // 关闭现为“隐藏”（异步 IPC）：黑幕延迟清理，待隐藏生效后再复原页面，
+        // 关闭现为“隐藏”（异步 IPC）：画面延迟清理，待隐藏生效后再复原页面，
         // 避免隐藏前一瞬闪回未扭曲的原内容
         window.setTimeout(cleanup, 400);
       }
@@ -217,7 +220,7 @@ function playBlackHole(root: HTMLElement, onDone: () => void): void {
       // 系统/浏览器节流或暂停时，计时器仍能持续推进，避免“卡住后无动画直接关闭”。
       raf = window.setTimeout(() => frame(performance.now()), 16) as unknown as number;
     } else {
-      drawBlackHole(ctx, w, h, 1, maxR);
+      drawBlackHole(ctx, w, h, 1, holeR);
       try {
         onDone();
       } finally {
@@ -226,6 +229,12 @@ function playBlackHole(root: HTMLElement, onDone: () => void): void {
     }
   };
 
+  // 提前提示浏览器为内容变换准备独立合成层，全程 GPU 变换不引发整页重绘
+  try {
+    root.style.willChange = "transform";
+  } catch {
+    /* ignore */
+  }
   raf = window.setTimeout(() => frame(performance.now()), 16) as unknown as number;
 }
 
@@ -234,22 +243,21 @@ function drawBlackHole(
   w: number,
   h: number,
   t: number,
-  maxR: number
+  r: number
 ): void {
   const cx = w / 2;
   const cy = h / 2;
-  // 暗核略快于整体进度扩张，确保在 coverFraction 之前已完全覆盖全屏
-  const darkR = maxR * easeOutCubicLocal(Math.min(1, t * 1.18));
   ctx.clearRect(0, 0, w, h);
+  if (r < 1) return;
 
-  // 1) 时空辉光外晕：暖色径向渐变由暗区边缘向外淡出
-  const haloR = darkR * 2.3;
+  // 1) 暖色辉光外晕（小洞范围内，开销低）
+  const haloR = r * 2.4;
   if (haloR > 1) {
-    const halo = ctx.createRadialGradient(cx, cy, darkR * 0.95, cx, cy, haloR);
-    const a = 1 - t * 0.4;
-    halo.addColorStop(0, `rgba(255, 196, 128, ${(0.55 * a).toFixed(3)})`);
-    halo.addColorStop(0.25, `rgba(255, 150, 90, ${(0.28 * a).toFixed(3)})`);
-    halo.addColorStop(0.6, `rgba(120, 90, 200, ${(0.12 * a).toFixed(3)})`);
+    const halo = ctx.createRadialGradient(cx, cy, r * 0.9, cx, cy, haloR);
+    const a = 1 - t * 0.35;
+    halo.addColorStop(0, `rgba(255, 190, 120, ${(0.5 * a).toFixed(3)})`);
+    halo.addColorStop(0.3, `rgba(255, 140, 80, ${(0.22 * a).toFixed(3)})`);
+    halo.addColorStop(0.7, `rgba(100, 80, 190, ${(0.1 * a).toFixed(3)})`);
     halo.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = halo;
     ctx.beginPath();
@@ -257,43 +265,49 @@ function drawBlackHole(
     ctx.fill();
   }
 
-  // 2) 旋转吸积盘臂：暗区边缘的明亮螺旋高光
-  const spin = t * Math.PI * 6;
+  // 2) 旋转吸积盘臂：围绕小黑洞高速旋转的明亮高光
+  const spin = t * Math.PI * 8;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(spin);
   const arms = 3;
   ctx.shadowColor = "rgba(255, 170, 90, 0.9)";
-  // 【性能】shadowBlur 是 Canvas 里最贵的操作之一，半径大时（darkR≈400 → blur≈48px）
-  // 每帧要做多次大核模糊，封顶到 20px：观感几乎无差，帧率显著提升
-  ctx.shadowBlur = Math.min(20, Math.max(8, darkR * 0.12));
+  // 【性能】shadowBlur 封顶，黑洞小所以开销天然可控
+  ctx.shadowBlur = Math.min(14, Math.max(6, r * 0.18));
   for (let i = 0; i < arms; i++) {
     const a0 = (i / arms) * Math.PI * 2;
     ctx.beginPath();
-    ctx.arc(0, 0, darkR * 1.12, a0, a0 + Math.PI * 0.9);
-    ctx.lineWidth = Math.max(2, darkR * 0.05);
-    ctx.strokeStyle = `rgba(255, 210, 160, ${(0.5 * (1 - t * 0.3)).toFixed(3)})`;
+    ctx.arc(0, 0, r * 1.35, a0, a0 + Math.PI * 0.7);
+    ctx.lineWidth = Math.max(2, r * 0.09);
+    ctx.strokeStyle = `rgba(255, 210, 160, ${(0.55 * (1 - t * 0.25)).toFixed(3)})`;
     ctx.stroke();
   }
   ctx.restore();
 
-  // 3) 深色吸积核心（吞噬区）
+  // 3) 黑洞本体（事件视界内的暗核）
   ctx.beginPath();
-  ctx.arc(cx, cy, darkR, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fillStyle = "#000";
   ctx.fill();
 
-  // 4) 光子环（事件视界亮环）
+  // 4) 光子环：事件视界亮环，随吸入进程逐渐提亮
+  const flash = Math.sin(t * Math.PI); // 0→1→0 的收尾闪光
   ctx.beginPath();
-  ctx.arc(cx, cy, darkR, 0, Math.PI * 2);
-  ctx.lineWidth = Math.max(1.5, darkR * 0.012);
-  ctx.strokeStyle = `rgba(255, 240, 220, ${(0.9 * (1 - t * 0.2)).toFixed(3)})`;
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.lineWidth = Math.max(1.5, r * 0.03);
+  ctx.strokeStyle = `rgba(255, 240, 220, ${(0.85 + flash * 0.15).toFixed(3)})`;
   ctx.shadowColor = "rgba(255, 200, 140, 1)";
-  ctx.shadowBlur = Math.min(18, Math.max(6, darkR * 0.1)); // 同样封顶，避免大半径高开销模糊
+  ctx.shadowBlur = Math.min(16, Math.max(6, r * 0.22) + flash * 6);
   ctx.stroke();
   ctx.shadowBlur = 0;
-}
 
-function easeOutCubicLocal(x: number): number {
-  return 1 - Math.pow(1 - x, 3);
+  // 5) 收尾迸发：吸收完成瞬间，光子环向外迸出一圈亮环（不扩张暗核本体）
+  if (t > 0.9) {
+    const ft = (t - 0.9) / 0.1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * (1 + ft * 1.6), 0, Math.PI * 2);
+    ctx.lineWidth = 2.5 * (1 - ft);
+    ctx.strokeStyle = `rgba(255, 235, 200, ${(0.9 * (1 - ft)).toFixed(3)})`;
+    ctx.stroke();
+  }
 }
