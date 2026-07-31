@@ -30,8 +30,6 @@ let capturePending = false;
 let capturing = false;
 let currentUrl: string | null = null;
 let lastAdaptiveCheck = 0;
-/** 上一帧 JPEG 字节：内容未变化时跳过更新（见 captureNow 说明） */
-let lastBytes: Uint8Array | null = null;
 
 /** 开启/更新实时毛玻璃：target 为面板元素；strength 0~100（CSS 模糊半径） */
 export function startRealtimeBlur(
@@ -61,7 +59,6 @@ export function stopRealtimeBlur(): void {
   running = false;
   el = null;
   mdTarget = null;
-  lastBytes = null;
   if (imgEl) {
     imgEl.remove();
     imgEl = null;
@@ -129,29 +126,10 @@ async function captureNow(): Promise<void> {
       scale: 0.5,
     });
     if (!running) return;
-    // 关键优化：背景内容没变化时【不更新 <img>】。否则即便桌面静止也会每 200ms
-    // 更换 img.src，触发一次解码 + blur 滤镜整层重栅格化，白白消耗 CPU/GPU；
-    // 桌面静止（最常见场景）时实际零更新，性能与延迟都更好。
-    // JPEG 编码对相同输入是确定的，逐字节比较即可判定是否变化（约 10KB，开销可忽略）。
-    if (lastBytes && bytes.length === lastBytes.length) {
-      let same = true;
-      for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] !== lastBytes[i]) {
-          same = false;
-          break;
-        }
-      }
-      if (same) {
-        // 内容未变化：仅节流检查按钮亮度（背景亮度可能没变，但仍保持自适应）
-        const now = Date.now();
-        if (now - lastAdaptiveCheck > 400 && el && imgEl) {
-          lastAdaptiveCheck = now;
-          applyAdaptiveColorsFromImage(el, imgEl);
-        }
-        return;
-      }
-    }
-    lastBytes = bytes;
+    // 每帧都更新背景 <img>（不做帧去重）：实时毛玻璃必须持续跟随便签背后的内容，
+    // 即便桌面静止也要保持"活着"的观感——去重虽省资源，但会导致背景停在某一帧、
+    // 看起来像固定截图（用户明确要求实时效果）。
+    // 性能由 img 直接承载解码 + GPU 合成/模糊保证（无 canvas 重编码）。
     const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: "image/jpeg" }));
     if (imgEl) {
       // 上一帧 URL 在 onload 后释放（避免图片仍在解码时被回收）
