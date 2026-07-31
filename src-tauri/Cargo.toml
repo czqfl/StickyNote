@@ -1,0 +1,27 @@
+[package]
+name = "sticky-note-tauri"
+version = "1.0.0"
+description = "A Tauri Sticky Note App"
+authors = ["you"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-fs = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+reqwest = { version = "0.12", features = ["json"] }
+sha2 = "0.10"
+arboard = "3"
+# 透明主题实时毛玻璃：GDI 截屏循环（截便签背后屏幕 → 前端 CSS 高斯模糊）
+windows-sys = { version = "0.59", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

@@ -1,0 +1,1895 @@
+:root {
+  --bg: #fffefb;
+  --bg-bar: #f7f4ee;
+  --bg-hover: #efe9df;
+  --bg-active: #e4dccf;
+  --border: #ebe5da;
+  --text: #3a3a3a;
+  --text-sub: #a39c90;
+  --text-hint: #c8c2b6;
+  --accent: #6b9fd9;
+  --grip-dot: #95c1f2;
+  --pin-on: #5bae6f;
+  --pin-off: #c8c2b6;
+  --danger: #dd5247;
+  --danger-bg: #fbe7e5;
+  --select-bg: #d6e4f0;
+  --radius: 14px;
+  --bar-h: 40px;
+}
+
+/* ===== 深色主题（全局可切换，作用于整个便签窗口）=====
+   仅在 <html> 上挂 .theme-dark 时启用；所有组件均走 var()，故一套变量即可整体换肤。
+   配色为冷调中性深灰，与浅色的暖白风格相呼应。 */
+:root.theme-dark {
+  --bg: #23232a;
+  --bg-bar: #2d2d35;
+  --bg-hover: #36363f;
+  --bg-active: #40404a;
+  --border: #3c3c45;
+  --text: #e6e4df;
+  --text-sub: #9a948b;
+  --text-hint: #6b665f;
+  --accent: #7fb0e6;
+  --grip-dot: #7fb0e6;
+  --pin-on: #5fbf74;
+  --pin-off: #6b665f;
+  --danger: #ec6a5f;
+  --danger-bg: #432a28;
+  --select-bg: #3a4a5e;
+  color-scheme: dark;
+}
+
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Microsoft YaHei UI", "PingFang SC", system-ui, -apple-system, sans-serif;
+  color: var(--text);
+  background: transparent;
+}
+
+/* ===== 通用窗口外壳 ===== */
+.note-window,
+.history-window {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--bg);
+  border-radius: var(--radius);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.05),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+}
+
+/* ===== 标题栏 ===== */
+.titlebar {
+  position: relative;
+  height: var(--bar-h);
+  min-height: var(--bar-h);
+  background: var(--bg-bar);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  overflow: hidden;
+}
+
+/* 标题栏居中拖动抓手：作为弹性占位元素夹在左右按钮组之间，
+   永远居中且绝不与左右按钮重叠（不再用绝对定位压住按钮） */
+.titlebar-grip {
+  flex: 1 1 auto;
+  min-width: 24px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  z-index: 1;
+}
+
+.titlebar-grip:active {
+  cursor: grabbing;
+}
+
+.titlebar-grip .grip-dots {
+  width: 54px;
+  height: 16px;
+  background-image: radial-gradient(var(--grip-dot) 1.8px, transparent 2px);
+  background-size: 7px 7px;
+  background-position: center;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.titlebar-grip:hover .grip-dots {
+  opacity: 0.9;
+}
+
+.titlebar-grip:active .grip-dots {
+  opacity: 1;
+}
+
+/* 左右按钮组置于抓取层之上，保证可点击 / 标题可编辑 */
+.titlebar-left,
+.titlebar-right {
+  position: relative;
+  z-index: 3;
+}
+
+/* 工具栏空间不足时（由 JS 测量 scrollWidth 动态加 .crowded），隐藏预览/拆分/整理，
+   避免溢出被裁切出现“半截按钮”；居中抓取区恒在（弹性占位，不重叠） */
+.toolbar.crowded .tool-md,
+.toolbar.crowded .tool-format {
+  display: none;
+}
+/* 窗口确实很窄时，隐藏历史/新增/全屏（居中抓取区始终可见） */
+@media (max-width: 300px) {
+  #btn-history,
+  #btn-new,
+  #btn-max {
+    display: none;
+  }
+}
+
+/* ===== 置顶按钮：扁平图钉（置顶=敲入，取消=拔出），干脆利落带冲击感 ===== */
+#btn-pin {
+  --pin-now: var(--pin-off);
+  position: relative;
+}
+#btn-pin.pinned {
+  --pin-now: var(--pin-on);
+}
+#btn-pin .nail {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--pin-now);
+  transform-origin: 50% 30%;
+  transition: color 0.16s ease;
+  will-change: transform;
+}
+#btn-pin .pin-icon {
+  display: block;
+}
+/* 静止态：未置顶时微微翘起，置顶时端正插稳 */
+#btn-pin:not(.pinned) .nail {
+  transform: translateY(-3px) rotate(-15deg);
+}
+#btn-pin.pinned .nail {
+  transform: translateY(0) rotate(0deg);
+}
+
+/* 敲入（置顶）：闪电下砸到底 → 冲击瞬间压扁 → 立即回稳，干脆利落 */
+@keyframes pin-in {
+  0%   { transform: translateY(-17px) rotate(-6deg) scale(1); opacity: 0; }
+  45%  { transform: translateY(1.6px) rotate(1deg) scale(1); opacity: 1; }   /* 砸中 */
+  58%  { transform: translateY(1.6px) rotate(1deg) scale(1.24, 0.7); }       /* 冲击挤压 */
+  76%  { transform: translateY(-2.4px) rotate(-0.5deg) scale(0.9, 1.12); }   /* 回弹拉伸 */
+  100% { transform: translateY(0) rotate(0deg) scale(1); }
+}
+/* 拔出（取消置顶）：短暂蓄力下压 → 啵地弹出上抬，利索收住 */
+@keyframes pin-out {
+  0%   { transform: translateY(0) rotate(0deg) scale(1); }
+  30%  { transform: translateY(0.8px) rotate(0deg) scale(0.94, 1); }          /* 蓄力下压 */
+  62%  { transform: translateY(-15px) rotate(-20deg) scale(1.08, 0.92); }     /* 弹出 */
+  84%  { transform: translateY(-4px) rotate(-18deg) scale(0.98, 1.02); }      /* 回稳 */
+  100% { transform: translateY(-3px) rotate(-15deg) scale(1); }               /* 归位（未置顶静止态） */
+}
+/* 冲击波：砸中瞬间一圈向外扩散，增强"冲击感" */
+#btn-pin::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--pin-now) 55%, transparent);
+  opacity: 0;
+  transform: scale(0.4);
+  pointer-events: none;
+}
+@keyframes pin-shock {
+  0%   { transform: scale(0.4); opacity: 0.9; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+#btn-pin.anim-in .nail {
+  animation: pin-in 0.34s cubic-bezier(0.5, 0.05, 0.2, 1) both;
+}
+#btn-pin.anim-in::after {
+  animation: pin-shock 0.38s ease-out 0.12s both;
+}
+#btn-pin.anim-out .nail {
+  animation: pin-out 0.3s cubic-bezier(0.45, 0.05, 0.2, 1) both;
+}
+
+/* ===== 贴边收起/弹出动画 ===== */
+/* 弹出：内层卡片从边缘“绽放”淡入，配合窗口物理滑出（带轻微回弹） */
+.note-window.edge-pop-in {
+  animation: edge-pop-in 0.36s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  will-change: opacity, box-shadow;
+}
+@keyframes edge-pop-in {
+  0% {
+    opacity: 0.4;
+    box-shadow:
+      0 2px 10px rgba(0, 0, 0, 0.06),
+      inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+  }
+  100% {
+    opacity: 1;
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.1),
+      0 4px 12px rgba(0, 0, 0, 0.05),
+      inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+  }
+}
+
+/* ===== 便签自定义背景图 ===== */
+.note-window.has-bg::before {
+  content: "";
+  position: absolute;
+  /* 向外扩展以容纳模糊半径，避免边缘透出透明（配合父级 overflow:hidden 裁掉溢出） */
+  inset: -48px;
+  background-image: var(--note-bg-img);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--note-bg-opacity, 1);
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+}
+/* 毛玻璃开启时，背景图片本身做模糊（独立开关，兼容两种模式） */
+.note-window.has-bg.glass::before {
+  filter: blur(var(--glass-blur, 16px));
+  /* 提升到独立合成层，模糊渐变时避免整页重绘 */
+  transform: translateZ(0);
+}
+/* 模糊过渡动画进行中（由 blur-anim.ts 添加/移除 .animating）：
+   提示浏览器为 filter 预留合成层，逐帧插值不掉帧；动画结束移除，避免长期占用显存 */
+.note-window.has-bg.glass.animating::before {
+  will-change: filter;
+}
+.note-window.has-bg .titlebar,
+.note-window.has-bg .editor-area,
+.note-window.has-bg .translate-panel {
+  position: relative;
+  z-index: 1;
+}
+/* 工具栏抬到更高层级：背景图+毛玻璃开启时 .toolbar 会形成 z-index:1 的层叠上下文，
+   与 .editor-area（同级、且 DOM 在后）并列，导致其下拉色板 .cc-panel（z-index:9999）
+   被编辑区遮挡、点不到。把工具栏整体抬到 3，色板随工具栏浮于编辑区/翻译区之上。 */
+.note-window.has-bg .toolbar {
+  position: relative;
+  z-index: 3;
+}
+.note-window.has-bg .titlebar {
+  background: color-mix(in srgb, var(--bg-bar) calc(var(--note-bar-alpha, 0.9) * 100%), transparent);
+}
+.note-window.has-bg .toolbar {
+  background: color-mix(in srgb, var(--bg-bar) calc(var(--note-bar-alpha, 0.9) * 100%), transparent);
+}
+.note-window.has-bg .editor-area {
+  background: color-mix(in srgb, var(--bg) calc(var(--note-panel-alpha, 0.7) * 100%), transparent);
+}
+
+/* ===== 设置弹窗：背景图片选择 ===== */
+.bg-img-row {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.bg-img-preview {
+  display: none;
+  width: 100%;
+  height: 120px;
+  margin: 8px 0 2px;
+  border-radius: 10px;
+  background-size: cover;
+  background-position: center;
+  border: 1px solid color-mix(in srgb, var(--bg-bar) 60%, #000 8%);
+  position: relative;
+  overflow: hidden;
+}
+.bg-img-preview::after {
+  content: "当前背景";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #fff;
+  background: linear-gradient(transparent, rgba(0,0,0,0.6));
+  border-radius: 0 0 10px 10px;
+}
+.bg-img-preview.no-bg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-bar) 50%, transparent);
+  color: var(--text-sub);
+  font-size: 12px;
+}
+.bg-img-preview.no-bg::after {
+  content: none;
+}
+.note-window.has-bg .editor {
+  background: transparent;
+}
+
+/* 设置弹窗：原内联样式收归为类，减少散落样式 */
+.hidden-file {
+  display: none !important;
+}
+.notes-dir-effective {
+  margin: -2px 0 8px 72px;
+}
+.md-filename {
+  margin: 0;
+}
+.bg-mode-note {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-top: 6px;
+}
+/* 透明背景下，背景图片 / 沉浸等与“图片模式”相关的控件置灰且不可点击（仍可见，方便定位） */
+.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+  filter: grayscale(0.4);
+}
+
+/* 背景沉浸：整张便签（标题栏/工具栏/输入区/翻译区）全部透明显示背景，而非仅输入区 */
+.note-window.has-bg.bg-immersive .titlebar,
+.note-window.has-bg.bg-immersive .toolbar,
+.note-window.has-bg.bg-immersive .editor-area,
+.note-window.has-bg.bg-immersive .translate-panel {
+  background: transparent;
+}
+
+/* ===== 透明背景：便签整体沉浸式透明，系统级高斯模糊（Acrylic）===== */
+/* 核心：整窗透明，背后屏幕由 Windows 系统级 Acrylic 实时模糊，零延迟零错位。
+   控件只盖一层很淡的"薄雾"（color-mix 取主题 --bg-bar 约 28% + 透明），
+   不发黑、与浅/深主题都协调；文字加投影提升对比度。 */
+.note-window.bg-transparent {
+  background: transparent; /* 让背后截屏透出 */
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+/* 工具栏单独抬到 3：其下拉色板 .cc-panel(z-index:9999) 不被同级靠后的 .editor-area(z-index:1) 遮挡 */
+.note-window.bg-transparent .toolbar {
+  position: relative;
+  z-index: 3;
+}
+/* 透明主题：除字体控件（颜色/字号）外，所有面板/按钮容器改为完全透明 +
+   背景毛玻璃模糊，让实时玻璃背景透出，呈现统一磨砂质感；
+   字体颜色/字号控件保持可见底色与边框，便于选色与选字号 */
+.note-window.bg-transparent .titlebar,
+.note-window.bg-transparent .toolbar,
+.note-window.bg-transparent .translate-panel,
+.note-window.bg-transparent .tool-md,
+.note-window.bg-transparent .tool-format,
+.note-window.bg-transparent .translate-src,
+.note-window.bg-transparent .translate-dst {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.16);
+  /* 不再用 backdrop-filter：canvas 底图本身已模糊，控件纯透明叠上去即可，
+     避免每个控件各自做一遍 GPU 模糊合成（拖动时每帧重算 → 卡顿主因） */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+/* 字体颜色/字号控件：保持可见底色与边框，不被强制透明（便于选色与选字号） */
+.note-window.bg-transparent .tool-color,
+.note-window.bg-transparent .tool-size-wrap {
+  background: color-mix(in srgb, var(--bg-bar, var(--bg)) 28%, transparent);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+/* 透明主题下标题输入框：完全透明（无 backdrop-filter），与其余控件一致，仅保留文字阴影保证可读 */
+.note-window.bg-transparent .title-input,
+.note-window.bg-transparent .title-input:focus {
+  background: transparent;
+  border-color: transparent;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.note-window.bg-transparent .editor-area,
+.note-window.bg-transparent .editor {
+  background: transparent;
+}
+.note-window.bg-transparent .titlebar,
+.note-window.bg-transparent .editor-area,
+.note-window.bg-transparent .translate-panel {
+  position: relative;
+  z-index: 1;
+}
+/* 文字增强对比度（浅色与深色主题均适用） */
+.note-window.bg-transparent .editor,
+.note-window.bg-transparent .title-input,
+.note-window.bg-transparent .icon-btn {
+  color: var(--text);
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.18), 0 0 8px rgba(255, 255, 255, 0.12);
+}
+.note-window.bg-transparent .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.note-window.bg-transparent .icon-btn:active {
+  background: rgba(255, 255, 255, 0.28);
+}
+/* 标题栏抓手点 */
+.note-window.bg-transparent .titlebar-grip .grip-dots {
+  opacity: 0.7;
+}
+
+/* 历史（预览）窗口同样套用全局背景图 */
+.history-window.has-bg {
+  background-image: var(--note-bg-img);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.history-window.has-bg .history-list {
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+}
+
+.titlebar-left,
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.titlebar-left {
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.titlebar-right {
+  gap: 1px;
+}
+
+/* 右侧操作按钮收紧：原 32px 宽、图标仅 15px，大量留白显得松散；此处仅缩右侧行 */
+.titlebar-right .icon-btn {
+  width: 24px;
+  height: 26px;
+  font-size: 14px;
+}
+
+/* 可编辑的便签标题（自定义标题）。留出右侧空白区域仍可拖动窗口 */
+.title-input {
+  width: 96px;
+  max-width: 40%;
+  min-width: 40px;
+  margin-left: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  font-family: inherit;
+  outline: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.title-input:hover {
+  background: transparent;
+}
+
+.title-input:focus {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.title-input::placeholder {
+  color: var(--text-hint);
+  font-weight: 500;
+}
+
+.dot {
+  color: var(--accent);
+  font-size: 10px;
+  margin-right: 6px;
+  line-height: 1;
+}
+
+.title-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-sub);
+  letter-spacing: 0.3px;
+}
+
+.icon-btn {
+  width: 30px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 7px;
+  color: var(--text-sub);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.08s ease;
+  font-size: 14px;
+  line-height: 1;
+  font-family: inherit;
+}
+
+.icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.icon-btn:active {
+  transform: scale(0.95);
+  background: var(--bg-active);
+}
+
+/* 翻译开关激活态：颜色变深，表示翻译区已显示 */
+.icon-btn.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.icon-btn.close:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* ===== 格式工具栏 ===== */
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-bar);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  overflow: hidden;
+}
+
+.tool-color {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  transition: border-color 0.12s ease;
+}
+
+.tool-color:hover {
+  border-color: var(--accent);
+}
+
+/* ===== WPS 风格颜色按钮：左侧字母+色条（上下排列），右侧下拉选色，与字号按钮同级样式 ===== */
+.tool-color.wps {
+  position: relative;
+  width: 46px;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  height: 30px;
+}
+
+.cc-drop {
+  flex: 0 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-left: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+  background: transparent;
+  color: var(--text-sub);
+  border-radius: 0 7px 7px 0;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+}
+
+.cc-drop:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--text);
+}
+
+.cc-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-sub);
+  border-radius: 7px 0 0 7px;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 2px 0;
+}
+
+.cc-main:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--text);
+}
+
+.cc-main:active {
+  transform: scale(0.96);
+}
+
+.cc-main .cc-letter {
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--text);
+  text-shadow: 0 0 2px color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+.cc-main-bg .cc-letter {
+  background: var(--text-sub);
+  color: var(--bg);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.cc-bar {
+  width: 22px;
+  height: 5px;
+  border-radius: 2px;
+  background: #888;
+}
+
+/* 原生取色框在 WPS 模式下隐藏（颜色值由面板管理），保留其 DOM 作为取值源 */
+.tool-color.wps .color-swatch-input {
+  display: none;
+}
+
+.cc-panel {
+  position: fixed;
+  z-index: 9999;
+  display: none;
+  grid-template-columns: repeat(5, 18px);
+  gap: 4px;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.cc-panel:not([hidden]) {
+  display: grid;
+}
+
+.cc-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.cc-swatch:hover {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cc-custom {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-sub);
+  margin-top: 2px;
+}
+
+.cc-custom-input {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.cc-custom-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.cc-custom-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+/* 字号按钮：左侧 Aa 图标点明“字体大小”，右侧下拉选具体像素；容器沿用透明风 */
+.tool-size-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  transition: border-color 0.12s ease;
+}
+
+.tool-size-wrap:hover {
+  border-color: var(--accent);
+}
+
+.ts-ico {
+  display: inline-flex;
+  align-items: baseline;
+  font-weight: 800;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text);
+  letter-spacing: -1px;
+  user-select: none;
+  text-shadow: 0 0 2px color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+.ts-ico-sm {
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 1px;
+}
+
+.tool-size {
+  width: 48px;
+  min-width: 48px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 600;
+  padding: 0 4px 0 0;
+  text-align: center;
+  cursor: pointer;
+  outline: none;
+  border-radius: 4px;
+}
+
+.tool-size:hover {
+  background: transparent;
+}
+
+.tool-size option {
+  text-align: center;
+}
+
+/* Markdown 预览/拆分按钮组：靠右排布，与“翻译”开关同类 */
+.tool-md {
+  margin-left: auto;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  padding: 1px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.md-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 7px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.md-btn:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--text);
+}
+
+.md-btn.active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
+.md-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.md-btn.loading {
+  color: transparent;
+  position: relative;
+  pointer-events: none;
+}
+.md-btn.loading::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid var(--text-sub);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: fmt-spin 0.7s linear infinite;
+}
+@keyframes fmt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 格式化按钮组：与 Markdown 组同类，紧跟其后排成一行 */
+.tool-format {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  padding: 1px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  margin-left: 2px;
+}
+
+/* 格式化格式选择小菜单（点击「整理」弹出） */
+.fmt-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 132px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fmt-menu-item {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.fmt-menu-item:hover {
+  background: var(--bg-hover);
+}
+.fmt-menu-item.cancel {
+  color: var(--text-sub);
+}
+
+/* 整张便签的加载遮罩（整理期间覆盖整个便签窗口） */
+.fmt-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.28);
+}
+.fmt-loading-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 26px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+}
+.fmt-loading-box .spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: fmt-spin 0.8s linear infinite;
+}
+.fmt-loading-text {
+  font-size: 13px;
+  color: var(--text-sub);
+}
+
+/* ===== git 风格差异弹窗 ===== */
+.fmt-diff-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.fmt-diff-modal {
+  width: min(640px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.fmt-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.fmt-diff-stat {
+  font-size: 12px;
+  color: var(--text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.fmt-diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0;
+  background: var(--bg-bar);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.diff-line {
+  display: flex;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0 12px;
+}
+
+.diff-sign {
+  flex: 0 0 14px;
+  opacity: 0.65;
+  user-select: none;
+}
+
+.diff-del {
+  background: rgba(255, 86, 86, 0.16);
+  color: #d23b3b;
+}
+
+.diff-add {
+  background: rgba(54, 190, 110, 0.18);
+  color: #1f9d57;
+}
+
+.diff-ctx {
+  color: var(--text-sub);
+}
+
+.fmt-diff-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.fmt-diff-tip {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+.fmt-diff-tip.warn {
+  color: #d98324;
+  font-weight: 600;
+}
+
+/* ===== 轻量提示 ===== */
+.sticky-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%) translateY(10px);
+  background: rgba(40, 40, 40, 0.92);
+  color: #fff;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 60;
+}
+
+.sticky-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ===== 编辑器（contenteditable） ===== */
+.editor {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  padding: 16px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--text);
+  background: var(--bg);
+  border: none;
+  outline: none;
+  overflow-y: auto;
+  font-family: inherit;
+  caret-color: var(--accent);
+  word-wrap: break-word;
+}
+
+/* 编辑区容器：默认/预览态为纵向（仅编辑器或仅预览），拆分态为左右两栏 */
+.editor-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--bg);
+  position: relative; /* 让宠物浮层(absolute)相对编辑区定位，精确对齐到文字行 */
+}
+
+.editor-area.split {
+  flex-direction: row;
+}
+
+/* Markdown 预览区：默认隐藏，preview/split 时显示 */
+.md-preview {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+}
+
+/* 预览文档本身的排版/滚动条等样式已迁移至 src/md-style.ts 的 DEFAULT_MD_CSS（注入 iframe 内） */
+
+.editor-area.preview .editor {
+  display: none;
+}
+
+.editor-area.preview .md-preview {
+  display: block;
+}
+
+.editor-area.split .md-preview {
+  display: block;
+  border-left: 1px solid var(--border);
+}
+
+/* 预览区滚动条样式见 src/md-style.ts（作用于 iframe 内 body） */
+
+/* ===== Markdown 预览样式已迁移至 src/md-style.ts ===== */
+/* 预览渲染在独立 iframe 内，样式以纯文本 CSS 注入，确保自定义 CSS（含 body / @media / :root）只作用于预览区，不污染便签窗口。 */
+
+.editor:empty:before {
+  content: attr(data-placeholder);
+  color: var(--text-hint);
+}
+
+.editor::-webkit-scrollbar {
+  width: 6px;
+}
+
+.editor::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.editor::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.editor::-webkit-scrollbar-thumb:hover {
+  background: var(--text-hint);
+}
+
+/* ===== 历史窗口 ===== */
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.history-list::-webkit-scrollbar-thumb:hover {
+  background: var(--text-hint);
+}
+
+.history-card {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  background: var(--bg-bar);
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.history-card:hover {
+  background: var(--bg-hover);
+}
+
+.card-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-snippet {
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-time {
+  font-size: 11px;
+  color: var(--text-sub);
+}
+
+.card-delete {
+  width: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: -6px -8px -6px 8px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-hint);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.card-delete:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.card-delete.confirming {
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  width: 48px;
+}
+
+.card-delete.confirming:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 2px 9px 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.card-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 0;
+  color: var(--text-sub);
+}
+
+.empty-icon {
+  font-size: 36px;
+  color: var(--text-hint);
+  margin-bottom: 10px;
+}
+
+.empty-text {
+  font-size: 13px;
+}
+
+/* ===== 设置按钮（齿轮）===== */
+.icon-btn.gear {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.icon-btn.gear:hover {
+  background: var(--bg-hover);
+  color: #4f86c6;
+}
+
+/* ===== 翻译框（底部，可拖动调高）===== */
+.translate-panel {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-bar);
+  border-top: 1px solid var(--border);
+  height: 150px;
+  max-height: 70%;
+}
+
+/* 翻译开关关闭时隐藏整个翻译区 */
+.translate-panel.hidden {
+  display: none;
+}
+
+.translate-resizer {
+  flex: none;
+  height: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  background: var(--bg-bar);
+  border-bottom: 1px solid var(--border);
+}
+
+.resizer-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: opacity 0.12s ease;
+}
+.resizer-grip .rd {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-hint);
+  opacity: 0.5;
+}
+.translate-resizer:hover .resizer-grip .rd {
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.translate-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+}
+
+.translate-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-sub);
+}
+
+/* 翻译区目标语言下拉（放头部，便于随时切换） */
+.tr-target {
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-sub);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 0 4px;
+  cursor: pointer;
+  outline: none;
+  max-width: 96px;
+}
+
+/* 翻译体：占满面板剩余高度，输入框与译文框各占一半并随面板拉高而撑大 */
+.translate-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 8px;
+  overflow: hidden;
+}
+
+.translate-src {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  font-family: inherit;
+  padding: 4px 6px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.translate-src:focus {
+  border-color: var(--accent);
+}
+
+/* 译文结果：带边框文本框，与输入框同高填满；复制按钮在框内右上角 */
+.translate-dst-box {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  box-sizing: border-box;
+}
+
+.translate-dst {
+  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  padding: 6px 30px 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px rgba(107, 159, 217, 0.04);
+}
+
+.translate-dst::-webkit-scrollbar {
+  width: 5px;
+}
+
+.translate-dst::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.translate-dst.loading {
+  color: var(--text-hint);
+  font-style: italic;
+}
+
+/* 译文框可编辑：聚焦时高亮边框，空内容时显示占位符 */
+.translate-dst[contenteditable="true"] {
+  cursor: text;
+  outline: none;
+}
+.translate-dst[contenteditable="true"]:focus {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.translate-dst:empty:before {
+  content: attr(data-placeholder);
+  color: var(--text-hint);
+  pointer-events: none;
+}
+
+/* 翻译格式按钮 + 弹出菜单（复用 .fmt-menu 外观，向上弹出避免被窗口底边裁切）*/
+.tr-fmt-wrap {
+  position: relative;
+}
+.tr-fmt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-sub);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tr-fmt-btn:hover {
+  color: var(--text);
+  background: var(--bg-active);
+}
+.tr-fmt-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.tr-fmt-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 6px;
+  min-width: 132px;
+}
+.tr-fmt-menu {
+  width: max-content;
+}
+.tr-fmt-menu .fmt-menu-item {
+  font-size: 12px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.tr-fmt-menu.hidden {
+  display: none;
+}
+.tr-fmt-menu .fmt-menu-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+.tr-fmt-menu .fmt-menu-item.active::after {
+  content: " ✓";
+}
+
+.btn-copy {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  height: 22px;
+  width: 22px;
+  font-size: 12px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+/* 深色主题下复制按钮改为半透明白底，避免浅色方块突兀 */
+.theme-dark .btn-copy {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.btn-copy:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.btn-copy.copied {
+  color: var(--pin-on);
+}
+
+.icon-btn svg {
+  display: block;
+  pointer-events: none;
+}
+
+/* ===== 设置弹窗 ===== */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+/* 独立“设置”窗口模式：不再有暗色遮罩，面板铺满整个窗口（窗口自带标题栏与边框） */
+.settings-overlay.settings-standalone {
+  background: var(--bg);
+  display: block;
+  z-index: 1;
+}
+
+.settings-modal {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 32px);
+  background: var(--bg);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 独立窗口模式：面板拉伸占满窗口，去掉圆角与外发光 */
+.settings-standalone .settings-modal {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ===== 设置弹窗：左侧菜单 + 右侧内容 两栏布局 ===== */
+.settings-layout-body {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+.settings-nav {
+  width: 168px;
+  flex: none;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-bar) 50%, transparent);
+  padding: 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.nav-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.settings-content {
+  flex: 1;
+  padding: 14px;
+  overflow-y: auto;
+  min-width: 0;
+}
+.settings-pane {
+  display: none;
+}
+.settings-pane.active {
+  display: block;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-bar);
+}
+
+.settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-body {
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.settings-section {
+  background: color-mix(in srgb, var(--bg-bar) 42%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.settings-tip {
+  font-size: 11px;
+  color: var(--text-hint);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shortcut-label {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.shortcut-combo {
+  font-size: 11px;
+  color: var(--text-sub);
+  background: var(--bg-bar);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  min-width: 92px;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.shortcut-combo.listening {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.shortcut-rec,
+.shortcut-confirm {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-sub);
+  cursor: pointer;
+  padding: 4px 10px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.shortcut-rec:hover,
+.shortcut-confirm:hover {
+  background: var(--bg-hover);
+}
+
+.shortcut-rec.recording {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.shortcut-confirm {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.theme-preview {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  flex: none;
+  transition: background 0.2s ease;
+}
+
+/* 窄面板：标签占满一行，控件换行显示 */
+@media (max-width: 380px) {
+  .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .settings-label {
+    width: auto;
+    margin-bottom: 4px;
+  }
+}
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-sub);
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.settings-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.settings-input,
+.settings-select {
+  flex: 1;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 8px;
+  outline: none;
+  min-width: 0;
+}
+
+.settings-input:focus,
+.settings-select:focus {
+  border-color: var(--accent);
+}
+
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-bar);
+}
+
+.settings-msg {
+  font-size: 11px;
+  color: var(--text-hint);
+  margin-right: auto;
+}
+
+.settings-msg.ok {
+  color: var(--pin-on);
+}
+
+.btn-primary {
+  font-size: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  padding: 6px 16px;
+  font-family: inherit;
+}
+
+.btn-primary:hover {
+  background: #5b8fce;
+}
+
+/* ===== 编辑器右键菜单 ===== */
+.ctx-menu {
+  position: fixed;
+  z-index: 2000;
+  min-width: 140px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  user-select: none;
+}
+
+.ctx-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.ctx-item:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+
+

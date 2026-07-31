@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "启用所有便签/历史窗口所需的核心 API（事件收发、窗口操作等）。应用自定义命令不受 ACL 限制，此能力仅为核心插件（如前端 listen/emit、onResized）授权。",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-effects",
+    "core:webview:default",
+    "core:app:default",
+    "dialog:allow-open"
+  ]
+}

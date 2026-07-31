@@ -1,0 +1,6 @@
+cargo_in_userprofile: False
+rustup_dir: False
+cargo_path: NOT_ON_PATH
+rustup_path: NOT_ON_PATH
+winget_path: C:\Users\18087\AppData\Local\Microsoft\WindowsApps\winget.exe
+found_cargo: NONE

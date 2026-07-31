@@ -1,0 +1,28 @@
+# ===== Dependencies =====
+node_modules/
+
+# ===== Build outputs =====
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# ===== Binaries / installers (produced by `npm run pack`) =====
+*.exe
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== OS / editor noise =====
+.DS_Store
+Thumbs.db
+*.swp
+
+# ===== WorkBuddy internal data (not part of the app) =====
+.workbuddy/
+
+# ===== Legacy Python build output (old version) =====
+legacy/python_build/
+
+# ===== Runtime note data (per-note JSON files, written at runtime) =====
+data/

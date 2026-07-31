@@ -1,0 +1,10 @@
+warn: It looks like you have an existing rustup settings file at:
+warn: C:\Users\18087\.rustup\settings.toml
+warn: Rustup will install the default toolchain as specified in the settings file,
+warn: instead of the one inferred from the default host triple.
+warn: installing msvc toolchain without its prerequisites
+info: profile set to minimal
+info: default host triple is x86_64-pc-windows-msvc
+info: syncing channel updates for stable-x86_64-pc-windows-msvc
+info: latest update on 2026-07-09 for version 1.97.0 (2d8144b78 2026-07-07)
+info: downloading 3 components
