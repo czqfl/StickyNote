@@ -46,7 +46,7 @@ export function startRealtimeBlur(
     invoke("set_exclude_from_capture", { enable: true }).catch(() => {});
     attachMoveListeners();
     void captureNow();
-    timer = window.setInterval(() => void captureNow(), 200);
+    timer = window.setInterval(() => void captureNow(), 450);
   } else {
     // 仅强度/目标变化：补一帧即可
     void captureNow();
@@ -102,7 +102,7 @@ function scheduleCapture(): void {
   window.setTimeout(() => {
     capturePending = false;
     if (running) void captureNow();
-  }, 60);
+  }, 100);
 }
 
 /** 截取窗口背后的屏幕区域，交给背景 <img> 显示并套用模糊 */
@@ -113,7 +113,7 @@ async function captureNow(): Promise<void> {
     const win = getCurrentWindow();
     const pos = await win.outerPosition();
     const size = await win.outerSize();
-    // 捕获窗口外矩形区域：坐标/尺寸为物理像素，降采样 0.5（模糊后无观感损失）；
+    // 捕获窗口外矩形区域：坐标/尺寸为物理像素，降采样 0.35（模糊后无观感损失）；
     // 自身已被截屏排除，拍到的是窗口背后的内容。
     // 向外多截取 48px（与背景层 inset:-48px 对应，容纳最大模糊半径 40px 的采样）：
     // 否则背景图边缘的模糊采样落到图外透明区域，出现“中间模糊、四周不模糊”。
@@ -126,13 +126,12 @@ async function captureNow(): Promise<void> {
       y: pos.y + inset - margin,
       w,
       h,
-      scale: 0.5,
+      scale: 0.35,
     });
     if (!running) return;
-    // 每帧都更新背景 <img>（不做帧去重）：实时毛玻璃必须持续跟随便签背后的内容，
-    // 即便桌面静止也要保持"活着"的观感——去重虽省资源，但会导致背景停在某一帧、
-    // 看起来像固定截图（用户明确要求实时效果）。
+    // 每帧都更新背景 <img>（不做帧去重）：实时毛玻璃必须持续跟随便签背后的内容。
     // 性能由 img 直接承载解码 + GPU 合成/模糊保证（无 canvas 重编码）。
+    // 截采样率 0.35：模糊后无观感损失，编码/解码/合成开销约为 0.5 的一半。
     const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: "image/jpeg" }));
     if (imgEl) {
       // 上一帧 URL 在 onload 后释放（避免图片仍在解码时被回收）
