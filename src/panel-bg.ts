@@ -142,3 +142,29 @@ export async function applyAdaptiveColors(el: HTMLElement, bgUrl: string): Promi
   }
   el.classList.toggle("on-dark-bg", dark);
 }
+
+/** 用“已加载完成的 <img>”采样背景亮度并切换 on-dark-bg。
+ *  供实时毛玻璃使用：背景帧直接显示在 <img> 上，直接采样它即可，
+ *  避免每次新建 Image 加载 blob URL（还会与 URL 释放产生竞态，导致采样失败、
+ *  按钮颜色始终不切换的隐蔽 bug）。 */
+export function applyAdaptiveColorsFromImage(el: HTMLElement, img: HTMLImageElement): void {
+  if (!img.complete || !img.naturalWidth) return;
+  try {
+    const c = document.createElement("canvas");
+    const size = 32;
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, size, size);
+    const d = ctx.getImageData(0, 0, size, size).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    }
+    const lum = sum / (size * size) / 255;
+    el.classList.toggle("on-dark-bg", lum < 0.45);
+  } catch {
+    /* 忽略采样失败 */
+  }
+}

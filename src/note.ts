@@ -221,12 +221,12 @@ export function mountNoteApp(noteId: string, preset = "") {
     startDragging();
   });
 
-  // 标题栏自适应：窗口变窄时提前隐藏次级按钮（历史/新建），避免与居中的抓取区域重叠；
-  // 抓取区域本身也隐藏（整条标题栏仍可拖动），比“等按钮被盖住再处理”更干净。
+  // 标题栏自适应：窗口变窄时提前隐藏次级按钮（历史/新建），并把居中的抓取区域
+  // 收缩成小号抓点，避免抓取区域与右侧按钮重叠（抓取点始终保留可见）。
   function adaptTitlebar() {
     titlebar.classList.remove("crowded");
     const overflow = titlebar.scrollWidth > titlebar.clientWidth + 1;
-    titlebar.classList.toggle("crowded", overflow || titlebar.clientWidth < 340);
+    titlebar.classList.toggle("crowded", overflow || titlebar.clientWidth < 380);
   }
 
   // 工具栏自适应：窗口变窄放不下时，隐藏“预览/拆分/整理”等次级按钮，避免被裁切成半截。
@@ -452,7 +452,7 @@ export function mountNoteApp(noteId: string, preset = "") {
         startRealtimeBlur(noteWindow, pct, mdBody);
       } else {
         stopRealtimeBlur();
-        noteWindow.classList.remove("has-bg");
+        noteWindow.classList.remove("has-bg", "on-dark-bg");
         noteWindow.style.removeProperty("--note-bg-img");
         noteWindow.style.removeProperty("--note-bg-opacity");
         if (mdBody) {
@@ -498,7 +498,7 @@ export function mountNoteApp(noteId: string, preset = "") {
         startRealtimeBlur(noteWindow, pct, mdBody);
       } else {
         stopRealtimeBlur();
-        noteWindow.classList.remove("has-bg");
+        noteWindow.classList.remove("has-bg", "on-dark-bg");
         noteWindow.style.removeProperty("--note-bg-img");
         applyGlassBlur({ target: noteWindow, strength: 0, enabled: false });
       }

@@ -112,12 +112,15 @@ body,
   cursor: grabbing;
 }
 
+/* 抓取点：一排“被高斯模糊”的柔和圆点（带光晕的毛玻璃质感），
+   取代原本边缘锐利的硬点阵 */
 .titlebar-grip .grip-dots {
   width: 54px;
   height: 16px;
-  background-image: radial-gradient(var(--grip-dot) 1.8px, transparent 2px);
-  background-size: 7px 7px;
+  background-image: radial-gradient(circle, var(--grip-dot) 1.5px, transparent 2.4px);
+  background-size: 9px 9px;
   background-position: center;
+  filter: blur(0.8px);
   opacity: 0.55;
   transition: opacity 0.15s ease;
   pointer-events: none;
@@ -129,6 +132,17 @@ body,
 
 .titlebar-grip:active .grip-dots {
   opacity: 1;
+}
+
+/* 便签缩窄（.crowded）：抓取区域收缩成小号抓点，避免与右侧按钮重叠；
+   拖拽仍可整条标题栏进行，抓取点始终可见 */
+.titlebar.crowded .titlebar-grip {
+  width: 36px;
+}
+.titlebar.crowded .titlebar-grip .grip-dots {
+  width: 26px;
+  height: 10px;
+  background-size: 8px 8px;
 }
 
 /* 左右按钮组置于抓取层之上，保证可点击 / 标题可编辑 */
@@ -478,6 +492,20 @@ body,
 .note-window.on-dark-bg .tool-md,
 .note-window.on-dark-bg .tool-format {
   color: rgba(255, 255, 255, 0.92);
+}
+/* 第二行（工具栏）容器：边框/底色显式跟随背景变浅，深色背景下清晰可辨 */
+.note-window.on-dark-bg .tool-color,
+.note-window.on-dark-bg .tool-md,
+.note-window.on-dark-bg .tool-format {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+}
+.note-window.on-dark-bg .tool-color:hover {
+  border-color: var(--accent);
+}
+.note-window.on-dark-bg .cc-main:hover,
+.note-window.on-dark-bg .cc-drop:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 .note-window.on-dark-bg .icon-btn:hover {
   background: rgba(255, 255, 255, 0.16);
