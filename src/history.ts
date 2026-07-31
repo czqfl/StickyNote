@@ -1,5 +1,6 @@
 import { listNotes, deleteNote, openNoteWindow, closeWindow, startDragging, getOpenNotes } from "./api";
-import { getSettings } from "./settings";
+import { getSettings, onSettingsChanged } from "./settings";
+import { applyPanelWithGlass } from "./panel-bg";
 
 export function mountHistoryApp() {
   const app = document.getElementById("app")!;
@@ -22,50 +23,27 @@ export function mountHistoryApp() {
   const titlebar = document.querySelector(".titlebar")!;
   const btnClose = document.getElementById("btn-close")!;
 
-  // 套用全局外观主题（浅色 / 透明 / 深色），使历史窗口与便签保持一致
-  getSettings()
-    .then((s) => {
-      const themeRoot = document.documentElement;
-      // 仅 dark 挂主题类；transparent 由下方半透明底色处理
-      themeRoot.classList.remove("theme-dark");
-      const theme = s.theme || "light";
-      if (theme === "dark") {
-        themeRoot.classList.add("theme-dark");
-      }
+  // 套用全局外观主题（浅色 / 透明 / 深色），并使历史窗口与便签使用同一套
+  // 背景管线（自定义背景图 / 透明主题壁纸 + 高斯模糊 + 按钮亮度自适应）。
+  async function applyThemeAndBg() {
+    try {
+      const s = await getSettings();
+      const root = document.documentElement;
+      root.classList.remove("theme-dark");
+      if ((s.theme || "light") === "dark") root.classList.add("theme-dark");
       const hw = document.querySelector(".history-window") as HTMLElement | null;
       if (!hw) return;
-
-      // 透明主题：历史窗口不做实时截屏模糊（它非截屏目标），仅用一层很淡的半透明实底色，
-      // 配合窗口透明（若开启）呈现轻盈的悬浮卡片感。
-      if (s.theme === "transparent") {
-        hw.classList.remove("has-bg");
-        hw.style.background = "color-mix(in srgb, var(--bg) 90%, transparent)";
-        return;
-      }
-
-      // 套用全局默认背景图（与便签窗口一致）
-      const rawBg = s.bg_image || "";
-      if (rawBg) {
-        const apply = async (bg: string) => {
-          let url = bg;
-          if (!bg.startsWith("data:")) {
-            try {
-              const { readBgImage } = await import("./api");
-              url = await readBgImage(bg);
-            } catch (e) {
-              return;
-            }
-          }
-          hw.style.setProperty("--note-bg-img", `url("${url}")`);
-          hw.classList.add("has-bg");
-        };
-        apply(rawBg);
-      } else {
-        hw.classList.remove("has-bg");
-        hw.style.removeProperty("--note-bg-img");
-      }
-    })
-    .catch((e) => console.error("读取主题失败:", e));
+      // 内容区透出背景的程度（近不透明，保证列表可读）
+      hw.style.setProperty("--note-panel-alpha", "0.9");
+      hw.style.setProperty("--note-bar-alpha", "0.9");
+      await applyPanelWithGlass(hw, s);
+    } catch (e) {
+      console.error("读取主题失败:", e);
+    }
+  }
+  applyThemeAndBg();
+  // 设置变更（如切主题/换背景/调模糊）时历史窗口即时跟随
+  onSettingsChanged(applyThemeAndBg);
 
   // 拖拽
   titlebar.addEventListener("mousedown", (e) => {

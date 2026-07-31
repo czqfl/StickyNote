@@ -20,7 +20,8 @@ import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
 import { requestBlackHoleClose } from "./blackhole";
-import { applyGlassBlur } from "./glass";
+import { MAX_BLUR_PX } from "./glass";
+import { applyPanelBackground, getWallpaperDataUrl } from "./panel-bg";
 import {
   getCurrentWindow,
   PhysicalPosition,
@@ -50,43 +51,6 @@ const ICON_CHECK = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" 
 const ICON_MAX = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>`;
 // 还原（已最大化时显示）：两个重叠方框
 const ICON_RESTORE = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>`;
-
-// 桌面壁纸 → 压缩后的 data URL（透明主题把壁纸当背景图用，与自定义背景图片同一条模糊管线）。
-// 壁纸可能 4K+，先压到最长边 1920 的 JPEG，避免超大 data URL 拖垮渲染；进程内缓存一份。
-let wallpaperDataUrlCache: Promise<string> | null = null;
-function getWallpaperDataUrl(): Promise<string> {
-  if (wallpaperDataUrlCache) return wallpaperDataUrlCache;
-  wallpaperDataUrlCache = (async () => {
-    try {
-      const { getWallpaper, readBgImage } = await import("./api");
-      const wp = await getWallpaper();
-      if (!wp) return "";
-      const dataUrl = await readBgImage(wp);
-      if (!dataUrl || !dataUrl.startsWith("data:")) return "";
-      const img = new Image();
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error("壁纸解码失败"));
-        img.src = dataUrl;
-      });
-      const maxEdge = 1920;
-      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
-      const w = Math.max(1, Math.round(img.naturalWidth * scale));
-      const h = Math.max(1, Math.round(img.naturalHeight * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return "";
-      ctx.drawImage(img, 0, 0, w, h);
-      return canvas.toDataURL("image/jpeg", 0.82);
-    } catch (e) {
-      console.warn("读取桌面壁纸失败:", e);
-      return "";
-    }
-  })();
-  return wallpaperDataUrlCache;
-}
 
 export function mountNoteApp(noteId: string, preset = "") {
   const app = document.getElementById("app")!;
@@ -131,17 +95,12 @@ export function mountNoteApp(noteId: string, preset = "") {
           <button type="button" class="cc-drop" id="tool-bg-drop" title="选择背景颜色">▾</button>
           <input type="color" class="color-swatch-input" id="tool-bg" value="#fffefb" title="选择背景色">
         </div>
-        <div class="tool-size-wrap" title="文字大小">
-          <span class="ts-ico" aria-hidden="true">A<span class="ts-ico-sm">a</span></span>
-          <select class="tool-size" id="tool-size" title="文字大小">
-            <option value="12">12</option>
-            <option value="14">14</option>
-            <option value="16">16</option>
-            <option value="18">18</option>
-            <option value="20">20</option>
-            <option value="24">24</option>
-            <option value="28">28</option>
-          </select>
+        <div class="tool-color wps" id="tool-size-wrap" title="文字大小">
+          <button type="button" class="cc-main" id="tool-size-main" title="选择文字大小">
+            <span class="cc-letter ts-letter" aria-hidden="true">A</span>
+            <span class="ts-num" id="tool-size-num">14</span>
+          </button>
+          <button type="button" class="cc-drop" id="tool-size-drop" title="选择字号">▾</button>
         </div>
         <button class="icon-btn active" id="btn-translate-toggle" title="显示翻译区">${ICON_TRANSLATE}</button>
         <div class="tool-md" id="tool-md" title="Markdown 预览模式">
@@ -204,7 +163,10 @@ export function mountNoteApp(noteId: string, preset = "") {
   const toolBg = document.getElementById("tool-bg") as HTMLInputElement;
   const toolFgApply = document.getElementById("tool-fg-apply") as HTMLButtonElement;
   const toolBgApply = document.getElementById("tool-bg-apply") as HTMLButtonElement;
-  const toolSize = document.getElementById("tool-size") as HTMLSelectElement;
+  const toolSizeWrap = document.getElementById("tool-size-wrap") as HTMLElement;
+  const toolSizeMain = document.getElementById("tool-size-main") as HTMLButtonElement;
+  const toolSizeDrop = document.getElementById("tool-size-drop") as HTMLButtonElement;
+  const toolSizeNum = document.getElementById("tool-size-num") as HTMLSpanElement;
   const btnTranslateToggle = document.getElementById("btn-translate-toggle")!;
   const btnMax = document.getElementById("btn-max")!;
   const editorArea = document.getElementById("editor-area") as HTMLElement;
@@ -258,6 +220,14 @@ export function mountNoteApp(noteId: string, preset = "") {
     startDragging();
   });
 
+  // 标题栏自适应：窗口变窄时提前隐藏次级按钮（历史/新建），避免与居中的抓取区域重叠；
+  // 抓取区域本身也隐藏（整条标题栏仍可拖动），比“等按钮被盖住再处理”更干净。
+  function adaptTitlebar() {
+    titlebar.classList.remove("crowded");
+    const overflow = titlebar.scrollWidth > titlebar.clientWidth + 1;
+    titlebar.classList.toggle("crowded", overflow || titlebar.clientWidth < 340);
+  }
+
   // 工具栏自适应：窗口变窄放不下时，隐藏“预览/拆分/整理”等次级按钮，避免被裁切成半截。
   // 测量前先移除 .crowded 以按“全部显示”的真实内容宽度判断，防止隐藏/显示来回抖动。
   function adaptToolbar() {
@@ -265,9 +235,15 @@ export function mountNoteApp(noteId: string, preset = "") {
     const overflow = toolbar.scrollWidth > toolbar.clientWidth + 1;
     toolbar.classList.toggle("crowded", overflow);
   }
-  requestAnimationFrame(adaptToolbar);
+  requestAnimationFrame(() => {
+    adaptToolbar();
+    adaptTitlebar();
+  });
   try {
-    appWindow.onResized(() => adaptToolbar());
+    appWindow.onResized(() => {
+      adaptToolbar();
+      adaptTitlebar();
+    });
   } catch {
     /* 某些环境下 onResized 不支持，忽略（缩放时可能不更新，影响极小） */
   }
@@ -429,16 +405,6 @@ export function mountNoteApp(noteId: string, preset = "") {
     setAlwaysOnTop(pinned).catch((e) => console.error("置顶失败:", e));
   }
 
-  /** 清除毛玻璃 CSS 变量（含自定义背景模式的 --glass-blur） */
-  function clearGlassValues(el: HTMLElement) {
-    el.style.removeProperty("--note-glass-opacity");
-    el.style.removeProperty("--note-glass-bg-alpha");
-    el.style.removeProperty("--note-glass-ctrl-alpha");
-    el.style.removeProperty("--note-glass-sub-alpha");
-    el.style.removeProperty("--note-glass-blur");
-    el.style.removeProperty("--glass-blur");
-  }
-
   /** 解析生效的背景图 data URL：优先便签自身背景，否则回退全局设置；磁盘路径读回为 data URL */
   async function resolveBgImage(s: Settings): Promise<string> {
     let bg = current.bg_image || s.bg_image || "";
@@ -453,59 +419,40 @@ export function mountNoteApp(noteId: string, preset = "") {
     return bg;
   }
 
-  /** 应用/清除背景图：优先用便签自身背景，否则回退全局设置背景（data URL）。设置 --note-bg-img 变量并切换 has-bg 类 */
+  /** 应用/清除背景：透明主题用桌面壁纸、非透明用自定义背景图（优先便签自身，否则全局）。
+   *  透明与非透明走同一条管线（背景图 + CSS 高斯模糊），观感完全一致。 */
   async function applyBackground() {
     const s = await getSettings();
     const transparent = s.theme === "transparent";
-    const pct = normalizeGlassPct(s.glass_blur);
 
-    if (transparent) {
-      // 透明主题：把桌面壁纸当作背景图，与「自定义背景图片」走完全相同的模糊管线
-      // （CSS blur，无任何 tint/蒙版）。面板保持透明（.bg-transparent 样式）。
-      noteWindow.classList.remove("bg-immersive", "bg-wallpaper");
-      noteWindow.classList.add("bg-transparent");
-      noteWindow.style.removeProperty("--note-panel-alpha");
-      noteWindow.style.removeProperty("--note-bar-alpha");
-      const wp = await getWallpaperDataUrl();
-      if (wp) {
-        noteWindow.style.setProperty("--note-bg-img", `url("${wp}")`);
-        noteWindow.style.setProperty("--note-bg-opacity", "1");
-        noteWindow.classList.add("has-bg");
-      } else {
-        noteWindow.style.removeProperty("--note-bg-img");
-        noteWindow.style.removeProperty("--note-bg-opacity");
-        noteWindow.classList.remove("has-bg");
-      }
-      applyGlassBlur({ target: noteWindow, strength: pct, enabled: s.glass_enabled !== false });
-      return;
-    }
-    // 非透明：清掉透明态
-    noteWindow.classList.remove("bg-transparent", "bg-wallpaper");
-    clearGlassValues(noteWindow);
+    let bgUrl = "";
+    if (!transparent) bgUrl = await resolveBgImage(s);
 
-    const bg = await resolveBgImage(s);
-    const immersive = s.bg_immersive === true;
-    if (bg) {
-      noteWindow.style.setProperty("--note-bg-img", `url("${bg}")`);
-      // 背景图固定完全不透明；磨砂（模糊）统一由「毛玻璃效果」控制，不再有独立的背景不透明度。
-      noteWindow.style.setProperty("--note-bg-opacity", "1");
-      noteWindow.style.setProperty("--note-panel-alpha", "0.98");
-      noteWindow.style.setProperty("--note-bar-alpha", "0.98");
-      noteWindow.classList.add("has-bg");
-    } else {
-      noteWindow.style.removeProperty("--note-bg-img");
-      noteWindow.style.removeProperty("--note-bg-opacity");
-      noteWindow.style.removeProperty("--note-panel-alpha");
-      noteWindow.style.removeProperty("--note-bar-alpha");
-      noteWindow.classList.remove("has-bg");
-    }
-    // 背景沉浸：整张便签（含标题栏/工具栏）透明显示背景，而非仅输入区
+    await applyPanelBackground(noteWindow, s, { bgUrl: bgUrl || undefined });
+
+    // 背景沉浸仅对「自定义背景图 + 非透明」有意义：整张便签（含标题栏/工具栏）透出背景
+    const immersive = !transparent && s.bg_immersive === true && !!bgUrl;
     noteWindow.classList.toggle("bg-immersive", immersive);
+    if (!transparent) {
+      if (bgUrl) {
+        // 非沉浸：内容面板用 0.98 近不透明底色垫底保证可读；沉浸时由 CSS 整体透明
+        noteWindow.style.setProperty("--note-panel-alpha", "0.98");
+        noteWindow.style.setProperty("--note-bar-alpha", "0.98");
+      } else {
+        noteWindow.style.removeProperty("--note-panel-alpha");
+        noteWindow.style.removeProperty("--note-bar-alpha");
+      }
+    } else {
+      noteWindow.style.removeProperty("--note-panel-alpha");
+      noteWindow.style.removeProperty("--note-bar-alpha");
+    }
   }
 
-  /** 统一套用毛玻璃强度（0~100%）：透明主题与自定义背景两种模式走同一个工具（同为 CSS 模糊）。 */
+  /** 统一套用毛玻璃强度（0~100%）：透明主题与自定义背景共用同一套 CSS 模糊管线，
+   *  0% 原图无模糊，100% 强模糊（≈ MAX_BLUR_PX），与设置面板所见即所得。 */
   async function applyGlassEnabled(): Promise<void> {
     const s = await getSettings();
+    const { applyGlassBlur } = await import("./glass");
     applyGlassBlur({
       target: noteWindow,
       strength: normalizeGlassPct(s.glass_blur),
@@ -529,7 +476,7 @@ export function mountNoteApp(noteId: string, preset = "") {
     await getSettings(); // 确保配置已加载，getShortcut 才能读到
     toolFgApply.title = `按当前颜色上色（${getShortcut("fg_color")}）`;
     toolBgApply.title = `按当前背景色上色（${getShortcut("bg_color")}）`;
-    toolSize.title = `文字大小（增大 ${getShortcut("size_up")} / 减小 ${getShortcut("size_down")}）`;
+    toolSizeWrap.title = `文字大小（增大 ${getShortcut("size_up")} / 减小 ${getShortcut("size_down")}）`;
     btnTranslate.title = `翻译（${getShortcut("translate")}）`;
   }
 
@@ -754,6 +701,40 @@ export function mountNoteApp(noteId: string, preset = "") {
     "#1971c2", "#6741d9", "#e8590c", "#ffffff", "#868e96",
   ];
 
+  // ---- 最近使用颜色（跨便签、跨重启持久化，最多保留 8 个）----
+  const RECENT_COLORS_KEY = "sticky-note-recent-colors";
+  function loadRecentColors(): string[] {
+    try {
+      const v = JSON.parse(localStorage.getItem(RECENT_COLORS_KEY) || "[]");
+      return Array.isArray(v) ? v.filter((c) => typeof c === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  function recordRecentColor(color: string): void {
+    const norm = color.toUpperCase();
+    const list = loadRecentColors().filter((c) => c !== norm);
+    list.unshift(norm);
+    while (list.length > 8) list.pop();
+    try {
+      localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(list));
+    } catch {
+      /* 忽略（存储不可用） */
+    }
+  }
+  /** 渲染“最近使用”区（无记录时隐藏） */
+  function renderRecentColors(panelEl: HTMLElement) {
+    const box = panelEl.querySelector("#cc-recent") as HTMLElement | null;
+    if (!box) return;
+    const recents = loadRecentColors();
+    box.innerHTML = recents.length
+      ? `<div class="cc-recent-title">最近使用</div>` +
+        recents
+          .map((c) => `<button type="button" class="cc-swatch" data-color="${c}" style="background:${c}"></button>`)
+          .join("")
+      : "";
+  }
+
   function updateColorBar(bar: HTMLElement, color: string): void {
     bar.style.background = color;
   }
@@ -766,11 +747,13 @@ export function mountNoteApp(noteId: string, preset = "") {
     panelEl: HTMLElement,
     applyFn: () => void,
   ): void {
-    // 右侧上方：应用当前颜色
+    // 右侧上方：应用当前颜色（并记入最近使用）
     applyBtn.addEventListener("click", () => {
       restoreSelectionOffsets(toolbarOff);
       applyFn();
       updateColorBar(barEl, inputEl.value);
+      recordRecentColor(inputEl.value);
+      renderRecentColors(panelEl);
     });
     // 左侧下拉：展开/收起配色面板
     dropBtn.addEventListener("click", (e) => {
@@ -785,17 +768,20 @@ export function mountNoteApp(noteId: string, preset = "") {
           panelEl.style.top = rect.bottom + "px";
           panelEl.style.left = rect.left + "px";
         }
+        renderRecentColors(panelEl);
         panelEl.removeAttribute("hidden");
       } else {
         panelEl.setAttribute("hidden", "");
       }
     });
-    // 构建面板：预设色块 + 自定义取色
+    // 构建面板：最近使用 + 预设色块 + 自定义取色
     panelEl.innerHTML =
+      `<div class="cc-recent" id="cc-recent"></div>` +
       COLOR_PRESETS.map(
         (c) => `<button type="button" class="cc-swatch" data-color="${c}" style="background:${c}"></button>`,
       ).join("") +
       `<label class="cc-custom">自定义<input type="color" class="cc-custom-input" value="${inputEl.value}"></label>`;
+    // 统一处理“点色块即应用”的逻辑（预设色块与最近使用色块共用）
     panelEl.querySelectorAll<HTMLButtonElement>(".cc-swatch").forEach((sw) => {
       sw.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -803,6 +789,8 @@ export function mountNoteApp(noteId: string, preset = "") {
         updateColorBar(barEl, inputEl.value);
         restoreSelectionOffsets(toolbarOff);
         applyFn();
+        recordRecentColor(inputEl.value);
+        renderRecentColors(panelEl);
         panelEl.setAttribute("hidden", "");
       });
     });
@@ -814,6 +802,8 @@ export function mountNoteApp(noteId: string, preset = "") {
     customInput.addEventListener("change", () => {
       restoreSelectionOffsets(toolbarOff);
       applyFn();
+      recordRecentColor(inputEl.value);
+      renderRecentColors(panelEl);
       panelEl.setAttribute("hidden", "");
     });
     inputEl.addEventListener("input", () => updateColorBar(barEl, inputEl.value));
@@ -882,14 +872,78 @@ export function mountNoteApp(noteId: string, preset = "") {
     applyBgColor,
   );
 
-  // 字号下拉：套字号前先还原工具栏交互前捕获的选区
-  toolSize.addEventListener("change", () => {
-    const px = toolSize.value;
-    if (!px) return;
-    restoreSelectionOffsets(toolbarOff);
-    applyFontSizeToSelection(px);
-    toolSize.value = px; // 保持显示所选字号，避免复位成空白
-  });
+  // ---- 字号：与颜色按钮同款的分段样式（左侧 Aa+数值，右侧 ▾），点击弹出自定义菜单 ----
+  // 原实现用原生 <select>，在无边框透明窗口里点击无反馈、下拉框也偶发点不开；
+  // 改为与「整理 / 翻译格式」同款的自定义弹出菜单，样式统一、反馈明确。
+  const SIZE_OPTIONS = [12, 14, 16, 18, 20, 24, 28];
+  let currentFontSize = 14;
+  let sizeMenu: HTMLElement | null = null;
+
+  function closeSizeMenu() {
+    if (sizeMenu) {
+      sizeMenu.remove();
+      sizeMenu = null;
+    }
+    document.removeEventListener("mousedown", onSizeMenuOutside, true);
+    document.removeEventListener("keydown", onSizeMenuKey, true);
+  }
+  function onSizeMenuOutside(e: MouseEvent) {
+    if (sizeMenu && !sizeMenu.contains(e.target as Node) && !toolSizeWrap.contains(e.target as Node)) {
+      closeSizeMenu();
+    }
+  }
+  function onSizeMenuKey(e: KeyboardEvent) {
+    if (e.key === "Escape") closeSizeMenu();
+  }
+
+  function showSizeMenu() {
+    if (sizeMenu) {
+      closeSizeMenu();
+      return;
+    }
+    const rect = toolSizeWrap.getBoundingClientRect();
+    const menu = document.createElement("div");
+    menu.className = "fmt-menu size-menu";
+    menu.innerHTML = SIZE_OPTIONS.map(
+      (px) => `<button type="button" class="fmt-menu-item${px === currentFontSize ? " active" : ""}" data-size="${px}">${px} px</button>`,
+    ).join("");
+    document.body.appendChild(menu);
+    sizeMenu = menu;
+    // 定位：夹紧在便签窗口视口内，放不下则翻到按钮上方
+    const mw = menu.offsetWidth;
+    const mh = menu.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = rect.left;
+    if (left + mw > vw - 4) left = Math.max(4, vw - mw - 4);
+    let top = rect.bottom + 6;
+    if (top + mh > vh - 4) {
+      const above = rect.top - mh - 6;
+      top = above >= 4 ? above : Math.max(4, vh - mh - 4);
+    }
+    menu.style.top = top + "px";
+    menu.style.left = left + "px";
+    menu.querySelectorAll<HTMLButtonElement>(".fmt-menu-item").forEach((b) => {
+      b.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        const px = Number(b.dataset.size);
+        closeSizeMenu();
+        if (!px) return;
+        currentFontSize = px;
+        toolSizeNum.textContent = String(px);
+        // 套字号前先还原工具栏交互前捕获的选区（与颜色按钮一致）
+        restoreSelectionOffsets(toolbarOff);
+        applyFontSizeToSelection(String(px));
+      });
+    });
+    // 延迟一帧再挂全局监听，避免本次点击立即触发“外部点击”把它关掉
+    setTimeout(() => {
+      document.addEventListener("mousedown", onSizeMenuOutside, true);
+      document.addEventListener("keydown", onSizeMenuKey, true);
+    }, 0);
+  }
+  toolSizeMain.addEventListener("click", showSizeMenu);
+  toolSizeDrop.addEventListener("click", showSizeMenu);
 
   // ---- 每便签翻译开关：激活则变深色并显示翻译区，否则隐藏 ----
   function applyTranslateVisibility() {
@@ -1024,23 +1078,28 @@ export function mountNoteApp(noteId: string, preset = "") {
     applyMdBackground();
   }
 
-  /** 为 Markdown 预览区套用与便签输入区统一的背景图（毛玻璃）。透明主题用壁纸，与输入区一致。 */
+  /** 为 Markdown 预览区套用与便签输入区统一的背景图（毛玻璃）：
+   *  透明主题同样用壁纸 + 高斯模糊（与输入区一致），模糊半径跟随毛玻璃强度设置。 */
   async function applyMdBackground() {
     const s = await getSettings();
     const doc = ensurePreviewDoc();
     if (!doc) return;
-    let bg = "";
-    if (s.theme === "transparent") {
-      bg = await getWallpaperDataUrl();
-    } else {
-      bg = await resolveBgImage(s);
-    }
+    const transparent = s.theme === "transparent";
+    const bg = transparent ? await getWallpaperDataUrl() : await resolveBgImage(s);
     if (bg) {
       doc.body.classList.add("has-bg-img");
+      doc.body.classList.toggle("md-transparent", transparent);
       doc.body.style.setProperty("--md-bg-img", `url("${bg}")`);
       doc.body.style.setProperty("--md-bg-opacity", "1");
+      doc.body.style.setProperty(
+        "--md-blur",
+        Math.round((normalizeGlassPct(s.glass_blur) / 100) * MAX_BLUR_PX) + "px",
+      );
     } else {
-      doc.body.classList.remove("has-bg-img");
+      doc.body.classList.remove("has-bg-img", "md-transparent");
+      doc.body.style.removeProperty("--md-bg-img");
+      doc.body.style.removeProperty("--md-bg-opacity");
+      doc.body.style.removeProperty("--md-blur");
     }
   }
 

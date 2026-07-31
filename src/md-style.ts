@@ -199,7 +199,11 @@ code { background: rgba(110, 118, 129, 0.4); }
  * 与便签输入区统一的毛玻璃效果：用 ::before 承载模糊后的背景图，用 ::after 叠加一层
  * 主题色蒙版（随背景图存在与否调整）以保证文字可读。二者均用 filter/普通层实现，
  * 不依赖 backdrop-filter，兼容性更稳。
- * 仅当 body 挂上 .has-bg-img 类时生效；图片与透明度由 JS 以 --md-bg-img / --md-bg-opacity 注入。
+ * 仅当 body 挂上 .has-bg-img 类时生效；图片、透明度、模糊半径由 JS 以
+ * --md-bg-img / --md-bg-opacity / --md-blur 注入（--md-blur 跟随毛玻璃强度设置，
+ * 与便签输入区同一条映射：0% = 0px，100% = 40px）。
+ * 透明主题下（body.md-transparent）：去掉主题色蒙版，呈现「透明 + 高斯模糊」，
+ * 与便签输入区在透明主题下的观感一致。
  */
 export const MD_BG_CSS = `
 body.has-bg-img { background: transparent; }
@@ -212,7 +216,8 @@ body.has-bg-img::before {
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  filter: blur(16px);
+  filter: blur(var(--md-blur, 16px));
+  transform: translateZ(0);
 }
 body.has-bg-img::after {
   content: "";
@@ -222,6 +227,10 @@ body.has-bg-img::after {
   background: var(--bg);
   /* 不透明度越高（更不透明），蒙版越淡、背景图越清晰；调低则蒙版更厚、便于阅读 */
   opacity: calc(0.82 - var(--md-bg-opacity, 1) * 0.42);
+}
+/* 透明主题：预览区与便签一致——透明 + 高斯模糊，仅保留一层极淡的蒙版保证文字可读 */
+body.has-bg-img.md-transparent::after {
+  opacity: 0.12;
 }
 `;
 

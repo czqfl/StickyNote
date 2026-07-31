@@ -1,5 +1,4 @@
 import { defineConfig } from "vite";
-import { resolve } from "path";
 
 export default defineConfig(async () => ({
   clearScreen: false,
@@ -8,14 +7,6 @@ export default defineConfig(async () => ({
     strictPort: true,
     watch: {
       ignored: ["**/src-tauri/**"],
-    },
-  },
-  build: {
-    rollupOptions: {
-      input: {
-        index: resolve(process.cwd(), "index.html"),
-        settings: resolve(process.cwd(), "settings.html"),
-      },
     },
   },
 }));

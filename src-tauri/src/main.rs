@@ -1412,7 +1412,7 @@ async fn create_note_window(
         .min_inner_size(220.0, 150.0)
         .position(x, y)
         .visible(false)
-        .shadow(true)
+        .shadow(false)
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
@@ -1455,7 +1455,7 @@ fn ensure_note_window(app: &AppHandle, id: &str) {
             .inner_size(w, h)
             .min_inner_size(220.0, 150.0)
             .visible(false)
-            .shadow(true)
+            .shadow(false)
             .skip_taskbar(true);
         builder = match saved_pos {
             Some((px, py)) => {
@@ -1563,7 +1563,7 @@ fn quick_new_note(app: &AppHandle) {
             .min_inner_size(220.0, 150.0)
             .position(x, y)
             .visible(false)
-            .shadow(true)
+            .shadow(false)
             .skip_taskbar(true)
             .build()
         {
@@ -1633,7 +1633,7 @@ async fn open_history_window(app: AppHandle) -> Result<(), String> {
         .min_inner_size(300.0, 180.0)
         .center()
         .visible(false)
-        .shadow(true)
+        .shadow(false)
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
@@ -1821,45 +1821,34 @@ fn set_exclude_from_capture(window: tauri::WebviewWindow, enable: bool) -> Resul
     }
 }
 
-/// 打开独立的“设置”窗口：与便签窗口解耦，自带固定初始尺寸，不再受便签视窗大小限制。
-/// 若窗口已存在则聚焦到它（避免重复打开）。加载专用页面 settings.html（只渲染设置面板）。
+/// 打开独立的“设置”窗口：与历史窗口完全相同的建法（透明无边框、可见性在 build 之后打开）。
+/// 关键：build 时 visible(false)，等 webview 初始化完成后再 show()——若在 build 时直接
+/// visible(true)（旧写法），WebView2 初始化与页面导航存在竞态，窗口会停在 about:blank
+/// 一片白、内容永远不加载（即长期“设置窗口白面板”的根因）。
 #[tauri::command]
-fn open_settings_window(app: AppHandle) -> Result<(), String> {
-    use tauri::WebviewUrl;
-    if let Some(win) = app.get_webview_window("settings") {
+async fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "settings";
+    if let Some(win) = app.get_webview_window(LABEL) {
         let _ = win.show();
         let _ = win.set_focus();
         return Ok(());
     }
-    // 计算居中位置（避免依赖可能不存在的 .center()）
-    let (w, h) = (880.0_f64, 640.0_f64);
-    let (x, y) = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|mon| {
-            let wa = mon.work_area();
-            let px = wa.position.x as f64 + (wa.size.width as f64 - w) / 2.0;
-            let py = wa.position.y as f64 + (wa.size.height as f64 - h) / 2.0;
-            (px.max(0.0), py.max(0.0))
-        })
-        .unwrap_or((200.0, 200.0));
-    tauri::WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
+    let win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
         .title("便签设置")
-        .decorations(true)
+        .decorations(false)
+        .transparent(true)
         .resizable(true)
-        .transparent(false) // 设置窗口必须是不透明实体窗：不继承便签的 transparent:true，否则整片白/桌面透出
-        .always_on_top(false) // 不置顶：避免遮挡便签窗口导致便签按钮点不动
-        .visible(true)
-        .inner_size(w, h)
-        .min_inner_size(720.0, 520.0)
-        .position(x, y)
+        .always_on_top(true)
+        .inner_size(880.0, 640.0)
+        .min_inner_size(640.0, 480.0)
+        .center()
+        .visible(false)
+        .shadow(false)
+        .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
-    // 打开后主动聚焦到设置窗口，保证它出现在置顶便签之上、用户能直接看到并操作
-    if let Some(w) = app.get_webview_window("settings") {
-        let _ = w.set_focus();
-    }
+    let _ = win.show();
+    let _ = win.set_focus();
     Ok(())
 }
 

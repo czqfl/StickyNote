@@ -68,10 +68,12 @@ body,
   position: relative;
   background: var(--bg);
   border-radius: var(--radius);
+  /* 无边框透明窗口不开启系统阴影（shadow(false)）：否则 DWM 会按窗口矩形绘制方角阴影，
+     与面板的圆角不匹配（“套了一层圆角不同的层”）。这里用内嵌阴影补足层次感，
+     外投影随窗口边缘裁切、画不出来，故只保留内嵌光边与底部轻微内影。 */
   box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.1),
-    0 4px 12px rgba(0, 0, 0, 0.05),
-    inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+    inset 0 0 0 1px rgba(0, 0, 0, 0.05),
+    inset 0 -14px 28px rgba(0, 0, 0, 0.05);
   overflow: hidden;
 }
 
@@ -142,10 +144,17 @@ body,
 .toolbar.crowded .tool-format {
   display: none;
 }
-/* 窗口确实很窄时，隐藏历史/新增/全屏（居中抓取区始终可见） */
+
+/* 标题栏变窄（动态测量加 .crowded）：提前隐藏次级按钮（历史/新建），并隐藏居中的
+   抓取点，避免抓取点与按钮视觉重叠（拖拽仍可整条标题栏进行，不依赖抓取点） */
+.titlebar.crowded #btn-history,
+.titlebar.crowded #btn-new,
+.titlebar.crowded .titlebar-grip {
+  display: none;
+}
+
+/* 窗口确实很窄时，再隐藏最大化（保留关闭/置顶/托盘） */
 @media (max-width: 300px) {
-  #btn-history,
-  #btn-new,
   #btn-max {
     display: none;
   }
@@ -236,15 +245,14 @@ body,
   0% {
     opacity: 0.4;
     box-shadow:
-      0 2px 10px rgba(0, 0, 0, 0.06),
-      inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+      inset 0 0 0 1px rgba(0, 0, 0, 0.05),
+      inset 0 -6px 12px rgba(0, 0, 0, 0.04);
   }
   100% {
     opacity: 1;
     box-shadow:
-      0 12px 40px rgba(0, 0, 0, 0.1),
-      0 4px 12px rgba(0, 0, 0, 0.05),
-      inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+      inset 0 0 0 1px rgba(0, 0, 0, 0.05),
+      inset 0 -14px 28px rgba(0, 0, 0, 0.05);
   }
 }
 
@@ -379,8 +387,8 @@ body,
 .note-window.bg-transparent {
   background: transparent;
   box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.18),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    inset 0 -14px 28px rgba(0, 0, 0, 0.08);
 }
 /* 工具栏单独抬到 3：其下拉色板 .cc-panel(z-index:9999) 不被同级靠后的 .editor-area(z-index:1) 遮挡 */
 .note-window.bg-transparent .toolbar {
@@ -444,15 +452,134 @@ body,
   opacity: 0.7;
 }
 
-/* 历史（预览）窗口同样套用全局背景图 */
-.history-window.has-bg {
+/* ===== 历史窗口：套用与便签一致的背景管线（背景图 + CSS 高斯模糊）===== */
+.history-window.has-bg::before {
+  content: "";
+  position: absolute;
+  /* 向外扩展以容纳模糊半径，避免边缘透出透明（配合父级 overflow:hidden 裁掉溢出） */
+  inset: -48px;
   background-image: var(--note-bg-img);
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  opacity: var(--note-bg-opacity, 1);
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+}
+.history-window.has-bg.glass::before {
+  filter: blur(var(--glass-blur, 16px));
+  transform: translateZ(0);
+}
+.history-window.has-bg.glass.animating::before {
+  will-change: filter;
+}
+.history-window.has-bg .titlebar,
+.history-window.has-bg .history-list {
+  position: relative;
+  z-index: 1;
+}
+.history-window.has-bg .titlebar {
+  background: color-mix(in srgb, var(--bg-bar) calc(var(--note-bar-alpha, 0.9) * 100%), transparent);
 }
 .history-window.has-bg .history-list {
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  background: color-mix(in srgb, var(--bg) calc(var(--note-panel-alpha, 0.7) * 100%), transparent);
+}
+/* 透明主题：历史窗口与便签一致——壁纸 + 高斯模糊，面板透明透出背景 */
+.history-window.bg-transparent {
+  background: transparent;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    inset 0 -14px 28px rgba(0, 0, 0, 0.08);
+}
+.history-window.bg-transparent .titlebar,
+.history-window.bg-transparent .history-list {
+  background: transparent;
+}
+.history-window.bg-transparent .title-text,
+.history-window.bg-transparent .icon-btn {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* ===== 背景过暗：按钮自动切换为浅色（由 JS 按背景图平均亮度给面板加 .on-dark-bg）=====
+   按钮的边框/底色多用 currentColor 混色，因此只需把主色切浅，边框与底色自动跟随；
+   保证第一行（标题栏）与第二行（工具栏）按钮在深色背景上始终清晰可见。 */
+.note-window.on-dark-bg {
+  --pin-off: rgba(255, 255, 255, 0.6);
+  --grip-dot: rgba(255, 255, 255, 0.85);
+}
+.note-window.on-dark-bg .icon-btn,
+.note-window.on-dark-bg .tool-color,
+.note-window.on-dark-bg .tool-md,
+.note-window.on-dark-bg .tool-format {
+  color: rgba(255, 255, 255, 0.92);
+}
+.note-window.on-dark-bg .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.note-window.on-dark-bg .icon-btn:active {
+  background: rgba(255, 255, 255, 0.24);
+}
+.note-window.on-dark-bg .icon-btn.active {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.note-window.on-dark-bg .icon-btn.gear {
+  color: #a9ccf0;
+}
+.note-window.on-dark-bg .icon-btn.gear:hover {
+  color: #d6e8fa;
+}
+.note-window.on-dark-bg .cc-main,
+.note-window.on-dark-bg .cc-drop,
+.note-window.on-dark-bg .md-btn,
+.note-window.on-dark-bg .ts-num {
+  color: rgba(255, 255, 255, 0.92);
+}
+.note-window.on-dark-bg .cc-main .cc-letter {
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.note-window.on-dark-bg .cc-main-bg .cc-letter {
+  background: rgba(255, 255, 255, 0.85);
+  color: #333;
+}
+.note-window.on-dark-bg .md-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.note-window.on-dark-bg .title-input {
+  color: rgba(255, 255, 255, 0.82);
+}
+.note-window.on-dark-bg .title-input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+.note-window.on-dark-bg .title-input:focus {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.45);
+}
+/* 历史窗口按钮同样跟随背景亮度 */
+.history-window.on-dark-bg .icon-btn,
+.history-window.on-dark-bg .title-text,
+.history-window.on-dark-bg .card-delete {
+  color: rgba(255, 255, 255, 0.9);
+}
+.history-window.on-dark-bg .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.history-window.on-dark-bg .card-title {
+  color: #fff;
+}
+.history-window.on-dark-bg .card-time,
+.history-window.on-dark-bg .card-snippet {
+  color: rgba(255, 255, 255, 0.72);
+}
+.history-window.on-dark-bg .history-card {
+  background: rgba(255, 255, 255, 0.12);
+}
+.history-window.on-dark-bg .history-card:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .titlebar-left,
@@ -741,64 +868,55 @@ body,
   border-radius: 3px;
 }
 
-/* 字号按钮：左侧 Aa 图标点明“字体大小”，右侧下拉选具体像素；容器沿用透明风 */
-.tool-size-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 7px;
-  border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  transition: border-color 0.12s ease;
+/* 最近使用颜色区：显示在预设色块上方，无记录时隐藏 */
+.cc-recent {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(5, 18px);
+  gap: 4px;
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px dashed var(--border);
 }
 
-.tool-size-wrap:hover {
-  border-color: var(--accent);
+.cc-recent:empty {
+  display: none;
 }
 
-.ts-ico {
-  display: inline-flex;
-  align-items: baseline;
+.cc-recent-title {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  color: var(--text-hint);
+  margin-bottom: 1px;
+  user-select: none;
+}
+
+/* 字号按钮：与「字体颜色按钮」完全同款的分段样式（左侧 Aa+当前字号，右侧 ▾ 弹菜单），
+   保证工具栏所有按钮样式统一；点击任一部分都弹出字号菜单（替代原生 select） */
+.ts-letter {
+  font-size: 14px;
   font-weight: 800;
-  font-size: 15px;
   line-height: 1;
   color: var(--text);
-  letter-spacing: -1px;
-  user-select: none;
   text-shadow: 0 0 2px color-mix(in srgb, var(--bg) 65%, transparent);
 }
 
-.ts-ico-sm {
+.ts-num {
   font-size: 10px;
   font-weight: 700;
-  margin-left: 1px;
+  line-height: 1;
+  color: var(--text-sub);
 }
 
-.tool-size {
-  width: 48px;
-  min-width: 48px;
-  height: 26px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  font-family: inherit;
+/* 字号菜单（与「整理 / 翻译格式」菜单同款） */
+.size-menu {
+  min-width: 96px;
+}
+
+.fmt-menu-item.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
   font-weight: 600;
-  padding: 0 4px 0 0;
-  text-align: center;
-  cursor: pointer;
-  outline: none;
-  border-radius: 4px;
-}
-
-.tool-size:hover {
-  background: transparent;
-}
-
-.tool-size option {
-  text-align: center;
 }
 
 /* Markdown 预览/拆分按钮组：靠右排布，与“翻译”开关同类 */
@@ -1570,11 +1688,13 @@ body,
   padding: 16px;
 }
 
-/* 独立“设置”窗口模式：不再有暗色遮罩，面板铺满整个窗口（窗口自带标题栏与边框） */
+/* 独立“设置”窗口模式：不再有暗色遮罩，面板铺满整个窗口（窗口自带标题栏与边框）。
+   padding 归零：基础样式带 16px 内边距，会留下一条"点不中面板"的窗口边缘死区。 */
 .settings-overlay.settings-standalone {
   background: var(--bg);
   display: block;
   z-index: 1;
+  padding: 0;
 }
 
 .settings-modal {
@@ -1595,6 +1715,44 @@ body,
   max-height: none;
   border-radius: 0;
   box-shadow: none;
+}
+
+/* ===== 设置面板：套用与便签一致的背景管线（背景图 + CSS 高斯模糊）===== */
+.settings-overlay.has-bg,
+.settings-overlay.bg-transparent {
+  background: transparent;
+}
+.settings-overlay.has-bg::before {
+  content: "";
+  position: fixed;
+  inset: -48px;
+  background-image: var(--note-bg-img);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--note-bg-opacity, 1);
+  z-index: 0;
+  pointer-events: none;
+}
+.settings-overlay.has-bg.glass::before {
+  filter: blur(var(--glass-blur, 16px));
+  transform: translateZ(0);
+}
+.settings-overlay.has-bg.glass.animating::before {
+  will-change: filter;
+}
+.settings-overlay.has-bg .settings-modal {
+  position: relative;
+  z-index: 1;
+  background: color-mix(in srgb, var(--bg) calc(var(--note-panel-alpha, 0.9) * 100%), transparent);
+}
+/* 透明主题：设置面板透出模糊壁纸（较浅的底色保证表单可读） */
+.settings-overlay.bg-transparent .settings-modal {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+.settings-overlay.has-bg .settings-header,
+.settings-overlay.has-bg .settings-footer {
+  background: color-mix(in srgb, var(--bg-bar) 92%, transparent);
 }
 
 /* ===== 设置弹窗：左侧菜单 + 右侧内容 两栏布局 ===== */
@@ -1657,6 +1815,13 @@ body,
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-bar);
+  /* 独立设置窗口无系统标题栏，头部即拖动区域 */
+  cursor: grab;
+  user-select: none;
+}
+
+.settings-header:active {
+  cursor: grabbing;
 }
 
 .settings-title {
