@@ -145,11 +145,11 @@ body,
   display: none;
 }
 
-/* 标题栏变窄（动态测量加 .crowded）：提前隐藏次级按钮（历史/新建），并隐藏居中的
-   抓取点，避免抓取点与按钮视觉重叠（拖拽仍可整条标题栏进行，不依赖抓取点） */
+/* 标题栏变窄（动态测量加 .crowded）：提前隐藏次级按钮（历史/新建）。
+   注意：居中的抓取区域【始终保留】——它是拖动便签的核心入口，任何情况下都不能消失；
+   拖拽本身整条标题栏都可用，但抓取点是明确的视觉抓手。 */
 .titlebar.crowded #btn-history,
-.titlebar.crowded #btn-new,
-.titlebar.crowded .titlebar-grip {
+.titlebar.crowded #btn-new {
   display: none;
 }
 
@@ -452,55 +452,6 @@ body,
   opacity: 0.7;
 }
 
-/* ===== 历史窗口：套用与便签一致的背景管线（背景图 + CSS 高斯模糊）===== */
-.history-window.has-bg::before {
-  content: "";
-  position: absolute;
-  /* 向外扩展以容纳模糊半径，避免边缘透出透明（配合父级 overflow:hidden 裁掉溢出） */
-  inset: -48px;
-  background-image: var(--note-bg-img);
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  opacity: var(--note-bg-opacity, 1);
-  border-radius: inherit;
-  z-index: 0;
-  pointer-events: none;
-}
-.history-window.has-bg.glass::before {
-  filter: blur(var(--glass-blur, 16px));
-  transform: translateZ(0);
-}
-.history-window.has-bg.glass.animating::before {
-  will-change: filter;
-}
-.history-window.has-bg .titlebar,
-.history-window.has-bg .history-list {
-  position: relative;
-  z-index: 1;
-}
-.history-window.has-bg .titlebar {
-  background: color-mix(in srgb, var(--bg-bar) calc(var(--note-bar-alpha, 0.9) * 100%), transparent);
-}
-.history-window.has-bg .history-list {
-  background: color-mix(in srgb, var(--bg) calc(var(--note-panel-alpha, 0.7) * 100%), transparent);
-}
-/* 透明主题：历史窗口与便签一致——壁纸 + 高斯模糊，面板透明透出背景 */
-.history-window.bg-transparent {
-  background: transparent;
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
-    inset 0 -14px 28px rgba(0, 0, 0, 0.08);
-}
-.history-window.bg-transparent .titlebar,
-.history-window.bg-transparent .history-list {
-  background: transparent;
-}
-.history-window.bg-transparent .title-text,
-.history-window.bg-transparent .icon-btn {
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-
 /* ===== 背景过暗：按钮自动切换为浅色（由 JS 按背景图平均亮度给面板加 .on-dark-bg）=====
    按钮的边框/底色多用 currentColor 混色，因此只需把主色切浅，边框与底色自动跟随；
    保证第一行（标题栏）与第二行（工具栏）按钮在深色背景上始终清晰可见。 */
@@ -590,8 +541,11 @@ body,
 }
 
 .titlebar-left {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
+  /* 有空间时尽量展示标题：整个左侧组（齿轮+标题）最多长到居中抓取区域
+     （50%±45px）前停下，与抓取点保持约 25px 间距，绝不与之重叠 */
+  max-width: calc(50% - 62px);
   gap: 2px;
 }
 
@@ -606,12 +560,14 @@ body,
   font-size: 14px;
 }
 
-/* 可编辑的便签标题（自定义标题）。留出右侧空白区域仍可拖动窗口 */
+/* 可编辑的便签标题（自定义标题）。宽度随空间自动伸缩、尽量展示完整标题；
+   收缩下限 40px，窗口很窄时让位给按钮。 */
 .title-input {
-  width: 96px;
-  max-width: 40%;
+  width: auto;
+  flex: 1 1 auto;
   min-width: 40px;
   margin-left: 6px;
+  margin-right: 10px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-sub);
@@ -1715,44 +1671,6 @@ body,
   max-height: none;
   border-radius: 0;
   box-shadow: none;
-}
-
-/* ===== 设置面板：套用与便签一致的背景管线（背景图 + CSS 高斯模糊）===== */
-.settings-overlay.has-bg,
-.settings-overlay.bg-transparent {
-  background: transparent;
-}
-.settings-overlay.has-bg::before {
-  content: "";
-  position: fixed;
-  inset: -48px;
-  background-image: var(--note-bg-img);
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  opacity: var(--note-bg-opacity, 1);
-  z-index: 0;
-  pointer-events: none;
-}
-.settings-overlay.has-bg.glass::before {
-  filter: blur(var(--glass-blur, 16px));
-  transform: translateZ(0);
-}
-.settings-overlay.has-bg.glass.animating::before {
-  will-change: filter;
-}
-.settings-overlay.has-bg .settings-modal {
-  position: relative;
-  z-index: 1;
-  background: color-mix(in srgb, var(--bg) calc(var(--note-panel-alpha, 0.9) * 100%), transparent);
-}
-/* 透明主题：设置面板透出模糊壁纸（较浅的底色保证表单可读） */
-.settings-overlay.bg-transparent .settings-modal {
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-}
-.settings-overlay.has-bg .settings-header,
-.settings-overlay.has-bg .settings-footer {
-  background: color-mix(in srgb, var(--bg-bar) 92%, transparent);
 }
 
 /* ===== 设置弹窗：左侧菜单 + 右侧内容 两栏布局 ===== */

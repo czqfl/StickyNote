@@ -22,6 +22,7 @@ import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./m
 import { requestBlackHoleClose } from "./blackhole";
 import { MAX_BLUR_PX } from "./glass";
 import { applyPanelBackground, getWallpaperDataUrl } from "./panel-bg";
+import { startRealtimeBlur, stopRealtimeBlur } from "./realtime-blur";
 import {
   getCurrentWindow,
   PhysicalPosition,
@@ -268,15 +269,25 @@ export function mountNoteApp(noteId: string, preset = "") {
    * 若用克隆 Range 记录，还原时指向的是被改写前的旧 DOM 节点，必然失效 → 选区丢失。
    * 改用字符偏移量后，无论 DOM 如何被改写，文字序列不变，按偏移重算选区始终精准，
    * 从而支持连续多次触发快捷键。
+   * 兜底：工具栏点击会令编辑器失焦，WebView2 失焦后 DOM 选区可能已被折叠，
+   * 此时回退到失焦前保存的 savedRange——否则“第一次改字号成功、之后都无效”。
    */
   function getSelectionOffsets(): { start: number; end: number } | null {
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-    const range = sel.getRangeAt(0);
-    return {
-      start: textOffsetAt(range.startContainer, range.startOffset),
-      end: textOffsetAt(range.endContainer, range.endOffset),
-    };
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      const range = sel.getRangeAt(0);
+      return {
+        start: textOffsetAt(range.startContainer, range.startOffset),
+        end: textOffsetAt(range.endContainer, range.endOffset),
+      };
+    }
+    if (savedRange && !savedRange.collapsed) {
+      return {
+        start: textOffsetAt(savedRange.startContainer, savedRange.startOffset),
+        end: textOffsetAt(savedRange.endContainer, savedRange.endOffset),
+      };
+    }
+    return null;
   }
 
   /** 把选区还原到字符偏移量位置（DOM 已被改写也能精确定位） */
@@ -419,29 +430,53 @@ export function mountNoteApp(noteId: string, preset = "") {
     return bg;
   }
 
-  /** 应用/清除背景：透明主题用桌面壁纸、非透明用自定义背景图（优先便签自身，否则全局）。
-   *  透明与非透明走同一条管线（背景图 + CSS 高斯模糊），观感完全一致。 */
+  /** 应用/清除背景：
+   *  - 透明主题：实时截取便签背后的真实屏幕内容作背景（实时动态毛玻璃），CSS 高斯模糊；
+   *    模糊关闭或强度 0 时回到完全透明。
+   *  - 非透明：自定义背景图（优先便签自身，否则全局）+ CSS 高斯模糊。
+   *  两模式共用同一条「背景图 + CSS 模糊」管线，观感一致，只是透明模式背景实时更新。 */
   async function applyBackground() {
     const s = await getSettings();
     const transparent = s.theme === "transparent";
+    const glassEnabled = s.glass_enabled !== false;
+    const pct = normalizeGlassPct(s.glass_blur);
+    const mdBody = ensurePreviewDoc()?.body ?? null;
 
-    let bgUrl = "";
-    if (!transparent) bgUrl = await resolveBgImage(s);
+    if (transparent) {
+      noteWindow.classList.remove("bg-immersive");
+      noteWindow.style.removeProperty("--note-panel-alpha");
+      noteWindow.style.removeProperty("--note-bar-alpha");
+      noteWindow.classList.add("bg-transparent");
+      if (glassEnabled && pct > 0) {
+        // 实时动态毛玻璃：背景 = 便签背后屏幕的实时画面
+        startRealtimeBlur(noteWindow, pct, mdBody);
+      } else {
+        stopRealtimeBlur();
+        noteWindow.classList.remove("has-bg");
+        noteWindow.style.removeProperty("--note-bg-img");
+        noteWindow.style.removeProperty("--note-bg-opacity");
+        if (mdBody) {
+          mdBody.classList.remove("has-bg-img", "md-transparent");
+          mdBody.style.removeProperty("--md-bg-img");
+        }
+      }
+      return;
+    }
 
+    // 非透明：停止实时截屏并清掉透明态
+    stopRealtimeBlur();
+    noteWindow.classList.remove("bg-transparent");
+
+    const bgUrl = await resolveBgImage(s);
     await applyPanelBackground(noteWindow, s, { bgUrl: bgUrl || undefined });
 
     // 背景沉浸仅对「自定义背景图 + 非透明」有意义：整张便签（含标题栏/工具栏）透出背景
-    const immersive = !transparent && s.bg_immersive === true && !!bgUrl;
+    const immersive = s.bg_immersive === true && !!bgUrl;
     noteWindow.classList.toggle("bg-immersive", immersive);
-    if (!transparent) {
-      if (bgUrl) {
-        // 非沉浸：内容面板用 0.98 近不透明底色垫底保证可读；沉浸时由 CSS 整体透明
-        noteWindow.style.setProperty("--note-panel-alpha", "0.98");
-        noteWindow.style.setProperty("--note-bar-alpha", "0.98");
-      } else {
-        noteWindow.style.removeProperty("--note-panel-alpha");
-        noteWindow.style.removeProperty("--note-bar-alpha");
-      }
+    if (bgUrl) {
+      // 非沉浸：内容面板用 0.98 近不透明底色垫底保证可读；沉浸时由 CSS 整体透明
+      noteWindow.style.setProperty("--note-panel-alpha", "0.98");
+      noteWindow.style.setProperty("--note-bar-alpha", "0.98");
     } else {
       noteWindow.style.removeProperty("--note-panel-alpha");
       noteWindow.style.removeProperty("--note-bar-alpha");
@@ -452,12 +487,24 @@ export function mountNoteApp(noteId: string, preset = "") {
    *  0% 原图无模糊，100% 强模糊（≈ MAX_BLUR_PX），与设置面板所见即所得。 */
   async function applyGlassEnabled(): Promise<void> {
     const s = await getSettings();
+    const transparent = s.theme === "transparent";
+    const pct = normalizeGlassPct(s.glass_blur);
+    const enabled = s.glass_enabled !== false;
     const { applyGlassBlur } = await import("./glass");
-    applyGlassBlur({
-      target: noteWindow,
-      strength: normalizeGlassPct(s.glass_blur),
-      enabled: s.glass_enabled !== false,
-    });
+    if (transparent) {
+      if (enabled && pct > 0) {
+        // 实时毛玻璃：更新强度（截屏循环已在运行时保持）
+        const mdBody = ensurePreviewDoc()?.body ?? null;
+        startRealtimeBlur(noteWindow, pct, mdBody);
+      } else {
+        stopRealtimeBlur();
+        noteWindow.classList.remove("has-bg");
+        noteWindow.style.removeProperty("--note-bg-img");
+        applyGlassBlur({ target: noteWindow, strength: 0, enabled: false });
+      }
+      return;
+    }
+    applyGlassBlur({ target: noteWindow, strength: pct, enabled });
   }
 
   function scheduleSave() {
@@ -781,18 +828,19 @@ export function mountNoteApp(noteId: string, preset = "") {
         (c) => `<button type="button" class="cc-swatch" data-color="${c}" style="background:${c}"></button>`,
       ).join("") +
       `<label class="cc-custom">自定义<input type="color" class="cc-custom-input" value="${inputEl.value}"></label>`;
-    // 统一处理“点色块即应用”的逻辑（预设色块与最近使用色块共用）
-    panelEl.querySelectorAll<HTMLButtonElement>(".cc-swatch").forEach((sw) => {
-      sw.addEventListener("click", (e) => {
-        e.stopPropagation();
-        inputEl.value = sw.getAttribute("data-color") || inputEl.value;
-        updateColorBar(barEl, inputEl.value);
-        restoreSelectionOffsets(toolbarOff);
-        applyFn();
-        recordRecentColor(inputEl.value);
-        renderRecentColors(panelEl);
-        panelEl.setAttribute("hidden", "");
-      });
+    // 事件委托统一处理色块点击（预设色块与“最近使用”色块共用）：
+    // “最近使用”是打开面板时才渲染的，若在构建期逐个绑监听，新渲染的色块会点不动。
+    panelEl.addEventListener("click", (e) => {
+      const sw = (e.target as HTMLElement).closest(".cc-swatch") as HTMLButtonElement | null;
+      if (!sw || !panelEl.contains(sw)) return;
+      e.stopPropagation();
+      inputEl.value = sw.getAttribute("data-color") || inputEl.value;
+      updateColorBar(barEl, inputEl.value);
+      restoreSelectionOffsets(toolbarOff);
+      applyFn();
+      recordRecentColor(inputEl.value);
+      renderRecentColors(panelEl);
+      panelEl.setAttribute("hidden", "");
     });
     const customInput = panelEl.querySelector(".cc-custom-input") as HTMLInputElement;
     customInput.addEventListener("input", () => {
@@ -821,12 +869,34 @@ export function mountNoteApp(noteId: string, preset = "") {
   /**
    * 给选区套上指定字号。用 extractContents 包裹法，保留选区内已有的
    * 颜色/背景等内联样式（execCommand("fontSize") 会破坏内层 color，故不用）。
+   * 若选区整体已位于同一个字号 span 内，直接改该 span 的字号，
+   * 避免反复点击字号按钮时不断嵌套新 span（嵌套也会让后续操作失效）。
    */
   function applyFontSizeToSelection(px: string) {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
     if (range.collapsed) return;
+
+    // 选区完全落在同一个字号 span 内 → 原地改字号（先移除内层多余字号，避免嵌套）
+    const common = range.commonAncestorContainer;
+    const commonEl = (common.nodeType === Node.ELEMENT_NODE ? common : common.parentElement) as HTMLElement | null;
+    const sizeSpan = commonEl?.closest("span[style*='font-size']") as HTMLElement | null;
+    if (sizeSpan && range.toString() === (sizeSpan.textContent || "")) {
+      sizeSpan.style.fontSize = px + "px";
+      // 清理因嵌套产生的“空壳字号 span”，保持 DOM 干净
+      sizeSpan.querySelectorAll("span[style*='font-size']").forEach((inner) => {
+        const sp = inner as HTMLElement;
+        if (sp.textContent === "") sp.remove();
+      });
+      const newRange = document.createRange();
+      newRange.selectNodeContents(sizeSpan);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+      scheduleSave();
+      return;
+    }
+
     const span = document.createElement("span");
     span.style.fontSize = px + "px";
     span.appendChild(range.extractContents()); // 取出选区内容（保留内层样式）并包裹
@@ -1079,22 +1149,30 @@ export function mountNoteApp(noteId: string, preset = "") {
   }
 
   /** 为 Markdown 预览区套用与便签输入区统一的背景图（毛玻璃）：
-   *  透明主题同样用壁纸 + 高斯模糊（与输入区一致），模糊半径跟随毛玻璃强度设置。 */
+   *  透明主题：背景图由实时毛玻璃模块逐帧更新（与输入区完全一致），
+   *  首帧到来前先用壁纸兜底；模糊半径跟随毛玻璃强度设置。 */
   async function applyMdBackground() {
     const s = await getSettings();
     const doc = ensurePreviewDoc();
     if (!doc) return;
     const transparent = s.theme === "transparent";
-    const bg = transparent ? await getWallpaperDataUrl() : await resolveBgImage(s);
+    const blurPx = Math.round((normalizeGlassPct(s.glass_blur) / 100) * MAX_BLUR_PX) + "px";
+    if (transparent) {
+      // 类与模糊半径固定；背景图由实时毛玻璃每帧覆盖（此处先用壁纸兜底，避免首帧空白）
+      doc.body.classList.add("has-bg-img", "md-transparent");
+      doc.body.style.setProperty("--md-bg-opacity", "1");
+      doc.body.style.setProperty("--md-blur", blurPx);
+      const bg = await getWallpaperDataUrl();
+      if (bg) doc.body.style.setProperty("--md-bg-img", `url("${bg}")`);
+      return;
+    }
+    const bg = await resolveBgImage(s);
     if (bg) {
       doc.body.classList.add("has-bg-img");
-      doc.body.classList.toggle("md-transparent", transparent);
+      doc.body.classList.remove("md-transparent");
       doc.body.style.setProperty("--md-bg-img", `url("${bg}")`);
       doc.body.style.setProperty("--md-bg-opacity", "1");
-      doc.body.style.setProperty(
-        "--md-blur",
-        Math.round((normalizeGlassPct(s.glass_blur) / 100) * MAX_BLUR_PX) + "px",
-      );
+      doc.body.style.setProperty("--md-blur", blurPx);
     } else {
       doc.body.classList.remove("has-bg-img", "md-transparent");
       doc.body.style.removeProperty("--md-bg-img");

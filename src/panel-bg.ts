@@ -1,12 +1,12 @@
-// 面板背景统一工具：便签窗口、历史窗口、设置窗口共用同一条背景管线——
-// 「背景图（自定义图片 / 透明主题的桌面壁纸）+ CSS 高斯模糊」，保证各窗口
-// 与「自定义背景图片」的观感完全一致（纯模糊、无色罩）。
-//
-// 另外提供「背景亮度自适应」：计算背景图平均亮度，过暗时给面板挂上
-// .on-dark-bg 类，按钮自动切换为浅色，保证背景过暗时按钮始终清晰可见。
+// 面板背景统一工具：为便签窗口应用「自定义背景图 + CSS 高斯模糊」，
+// 并依据背景亮度自动切换 on-dark-bg（背景过暗时按钮自动变浅色）。
+// （透明主题的实时动态模糊见 realtime-blur.ts；设置/历史面板不套用背景，
+//   避免实时模糊的渲染开销造成打开卡顿。）
 
 import type { Settings } from "./types";
-import { normalizeGlassPct } from "./settings";
+
+/** 桌面壁纸 → 压缩后的 data URL（透明主题首帧兜底 / Markdown 预览兜底背景图）。
+ *  壁纸可能 4K+，先压到最长边 1920 → JPEG，避免超大 data URL 拖垮渲染；进程内缓存一份。 */
 
 /** 桌面壁纸 → 压缩后的 data URL（透明主题把壁纸当背景图用，与自定义背景图片同一条模糊管线）。
  *  壁纸可能 4K+，先压到最长边 1920 → JPEG，避免超大 data URL 拖垮渲染；进程内缓存一份。 */
@@ -141,13 +141,4 @@ export async function applyAdaptiveColors(el: HTMLElement, bgUrl: string): Promi
     }
   }
   el.classList.toggle("on-dark-bg", dark);
-}
-
-/** 便捷入口：按设置把背景应用到面板，并套用毛玻璃强度（供历史/设置窗口使用） */
-export async function applyPanelWithGlass(el: HTMLElement, s: Settings): Promise<void> {
-  const pct = normalizeGlassPct(s.glass_blur);
-  const enabled = s.glass_enabled !== false;
-  await applyPanelBackground(el, s);
-  const { applyGlassBlur } = await import("./glass");
-  applyGlassBlur({ target: el, strength: pct, enabled });
 }

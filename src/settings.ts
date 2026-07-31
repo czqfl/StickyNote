@@ -1,6 +1,6 @@
 import { loadSettings, saveSettings, saveMdCustom, openFile, startDragging } from "./api";
 import { applyGlassBlur } from "./glass";
-import { applyPanelBackground, applyPanelWithGlass } from "./panel-bg";
+import { applyPanelBackground } from "./panel-bg";
 import { listen } from "@tauri-apps/api/event";
 import type { Settings } from "./types";
 
@@ -651,14 +651,11 @@ export async function openSettingsModal(): Promise<void> {
   });
   themeSel.value = draft.theme || "light";
 
-  // 透明主题实时预览：切到/切离透明时即时启停毛玻璃。预览目标取本窗口内的
-  // 便签面板（便签窗口内打开时）；独立设置窗口里则直接作用于设置面板自身，
-  // 所见即所得（由便签窗口 onSettingsChanged 在保存后接管全局生效）。
+  // 透明主题实时预览：切到/切离透明时即时启停毛玻璃。仅当面板运行在便签窗口内
+  // （有 .note-window）时生效；独立设置窗口不套用背景（避免模糊渲染开销造成卡顿），
+  // 由便签窗口 onSettingsChanged 在保存后接管全局生效。
   function previewPanel(): HTMLElement | null {
-    return (
-      (document.querySelector(".note-window") as HTMLElement | null) ??
-      (document.getElementById("settings-overlay") as HTMLElement | null)
-    );
+    return document.querySelector(".note-window") as HTMLElement | null;
   }
   function applyTransparentPreview(transparent: boolean) {
     const panel = previewPanel();
@@ -1018,19 +1015,4 @@ export async function openSettingsModal(): Promise<void> {
       console.error("异步加载设置失败:", e);
     }
   })();
-
-  // 设置面板自身也套用便签的背景设置（自定义背景图 / 透明主题壁纸 + 高斯模糊），
-  // 与便签窗口观感一致；设置保存后（settings-changed 全局广播）自动跟随刷新。
-  async function applySettingsPanelBg() {
-    const el = document.getElementById("settings-overlay") as HTMLElement | null;
-    if (!el) return;
-    try {
-      const s = await withTimeout(loadSettings(), 6000, "面板背景加载设置");
-      await applyPanelWithGlass(el, s);
-    } catch (e) {
-      console.error("设置面板背景应用失败:", e);
-    }
-  }
-  applySettingsPanelBg();
-  onSettingsChanged(applySettingsPanelBg);
 }

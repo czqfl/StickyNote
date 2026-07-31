@@ -1,6 +1,5 @@
 import { listNotes, deleteNote, openNoteWindow, closeWindow, startDragging, getOpenNotes } from "./api";
-import { getSettings, onSettingsChanged } from "./settings";
-import { applyPanelWithGlass } from "./panel-bg";
+import { getSettings } from "./settings";
 
 export function mountHistoryApp() {
   const app = document.getElementById("app")!;
@@ -23,27 +22,15 @@ export function mountHistoryApp() {
   const titlebar = document.querySelector(".titlebar")!;
   const btnClose = document.getElementById("btn-close")!;
 
-  // 套用全局外观主题（浅色 / 透明 / 深色），并使历史窗口与便签使用同一套
-  // 背景管线（自定义背景图 / 透明主题壁纸 + 高斯模糊 + 按钮亮度自适应）。
-  async function applyThemeAndBg() {
-    try {
-      const s = await getSettings();
+  // 套用全局外观主题（浅色 / 深色），使历史窗口与便签配色一致。
+  // 注意：不再套用背景图/高斯模糊——实时模糊对这类辅助窗口开销大、且容易卡顿。
+  getSettings()
+    .then((s) => {
       const root = document.documentElement;
       root.classList.remove("theme-dark");
       if ((s.theme || "light") === "dark") root.classList.add("theme-dark");
-      const hw = document.querySelector(".history-window") as HTMLElement | null;
-      if (!hw) return;
-      // 内容区透出背景的程度（近不透明，保证列表可读）
-      hw.style.setProperty("--note-panel-alpha", "0.9");
-      hw.style.setProperty("--note-bar-alpha", "0.9");
-      await applyPanelWithGlass(hw, s);
-    } catch (e) {
-      console.error("读取主题失败:", e);
-    }
-  }
-  applyThemeAndBg();
-  // 设置变更（如切主题/换背景/调模糊）时历史窗口即时跟随
-  onSettingsChanged(applyThemeAndBg);
+    })
+    .catch((e) => console.error("读取主题失败:", e));
 
   // 拖拽
   titlebar.addEventListener("mousedown", (e) => {
