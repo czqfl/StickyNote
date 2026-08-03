@@ -28,7 +28,7 @@ export function mountHistoryApp() {
     .then((s) => {
       const root = document.documentElement;
       root.classList.remove("theme-dark");
-      if ((s.theme || "light") === "dark") root.classList.add("theme-dark");
+      if (s.theme === "dark" || s.theme === "transparent") root.classList.add("theme-dark");
     })
     .catch((e) => console.error("读取主题失败:", e));
 

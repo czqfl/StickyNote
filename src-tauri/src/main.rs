@@ -1838,19 +1838,21 @@ fn set_exclude_from_capture(window: tauri::WebviewWindow, enable: bool) -> Resul
     }
 }
 
-/// 原生亚克力毛玻璃（Windows 11 设置 / PowerShell 同款 DWM 效果）：
-/// 用未文档化的 SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)
-/// 让 DWM 合成器直接对窗口背后的实时桌面画面做高斯模糊——不截屏、不编码、不走 IPC，
-/// 由系统 GPU 合成层逐帧完成，零延迟。opacity 0~255 控制着色层不透明度
-/// （等价 PowerShell“背景不透明度”滑块：0 无着色纯模糊，255 近乎不透明）；
-/// tint_rgb 为着色色值（0xRRGGBB，配合主题色）。模糊半径由系统固定（同系统亚克力），
-/// 不再支持 CSS 式 0~100% 强度调节——这正是放弃截屏式毛玻璃换取实时性的代价。
+/// 原生亚克力毛玻璃（PowerShell 设置同款 DWM 效果）：
+/// 直接调 SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)（SWCA）：
+/// - 与焦点无关：便签失焦也持续模糊（SYSTEMBACKDROP 亚克力失焦即停止渲染模糊，
+///   一点便签外部"透明效果就消失"，正是用户反馈的问题）；
+/// - tint 由 gradient 完全控制：颜色 = 前端传的主题色（--bg），alpha = 背景不透明度
+///   （0~255，0 会失效故前端最小传 1）——1% 时 tint 约 1% 几乎不可见，
+///   100% 时为纯主题色面板；无黑色蒙版（勿用黑色 tint）。
+/// 为什么不用 Effect::Blur（SWCA blurbehind）：渐变渲染异常（黑色蒙版/黑白闪）。
+/// 未文档化 API 不在导入表，运行时 GetProcAddress 动态获取（window-vibrancy 同款）。
 #[tauri::command]
 fn set_acrylic(
     window: tauri::WebviewWindow,
     enable: bool,
     _opacity: u32,
-    _tint_rgb: u32,
+    tint_rgb: u32,
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1875,7 +1877,6 @@ fn set_acrylic(
             *mut WindowCompositionAttribData,
         ) -> i32;
 
-        // 未文档化 API 不在 user32.lib 的导入表里，链接期无法解析，须运行时 GetProcAddress 动态获取
         fn call_set_wca(
             hwnd: windows_sys::Win32::Foundation::HWND,
             data: *mut WindowCompositionAttribData,
@@ -1897,7 +1898,9 @@ fn set_acrylic(
                 if p.is_none() {
                     return None;
                 }
-                Some(std::mem::transmute::<unsafe extern "system" fn() -> isize, SetWcaFn>(p.unwrap()))
+                Some(std::mem::transmute::<unsafe extern "system" fn() -> isize, SetWcaFn>(
+                    p.unwrap(),
+                ))
             });
             match proc {
                 Some(f) => unsafe { f(hwnd, data) },
@@ -1907,24 +1910,30 @@ fn set_acrylic(
 
         const WCA_ACCENT_POLICY: u32 = 19;
         const ACCENT_DISABLED: u32 = 0;
-        // 纯模糊（无 tint 无蒙版）：DWM 实时模糊窗口背后的桌面，零延迟。
-        // 不用 ACCENT_ENABLE_ACRYLICBLURBEHIND：其自带白色着色层（Win11 上 tint
-        // 不可控），正是用户反馈的"白色蒙版"来源。面板深浅（不透明度）由前端 CSS
-        // 半透明背景控制（--trans-opacity），所见即所得、实时生效。
-        const ACCENT_ENABLE_BLURBEHIND: u32 = 3;
+        const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
 
         let hwnd = window.hwnd().map_err(|e| e.to_string())?;
         // windows crate 的 HWND 与 windows-sys 的 HWND 底层都是 *mut c_void
         let raw: windows_sys::Win32::Foundation::HWND = hwnd.0 as _;
+        let (state, flags, gradient) = if enable {
+            // 本机实测 SWCA tint 会放大渲染（alpha 极小时仍有可见着色），
+            // 因此 alpha 固定取 1（最小可用的“不失效”值），着色近似不可见；
+            // 面板深浅完全由前端 CSS（--trans-opacity）线性控制。
+            let r = (tint_rgb >> 16) & 0xff;
+            let g = (tint_rgb >> 8) & 0xff;
+            let b = tint_rgb & 0xff;
+            (
+                ACCENT_ENABLE_ACRYLICBLURBEHIND,
+                0u32,
+                (1u32 << 24) | (b << 16) | (g << 8) | r,
+            )
+        } else {
+            (ACCENT_DISABLED, 0u32, 0u32)
+        };
         let mut policy = AccentPolicy {
-            accent_state: if enable {
-                ACCENT_ENABLE_BLURBEHIND
-            } else {
-                ACCENT_DISABLED
-            },
-            // blurbehind 需要 flags=2（window-vibrancy 同款）；gradient 不用，置 0
-            accent_flags: if enable { 2 } else { 0 },
-            gradient_color: 0,
+            accent_state: state,
+            accent_flags: flags,
+            gradient_color: gradient,
             animation_id: 0,
         };
         let mut data = WindowCompositionAttribData {

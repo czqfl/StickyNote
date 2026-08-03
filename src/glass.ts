@@ -14,6 +14,20 @@ import { tweenGlassBlur } from "./blur-anim";
 /** 背景磨砂的最大模糊半径（px），对应强度 100% */
 export const MAX_BLUR_PX = 40;
 
+/** 解析 CSS 颜色（#rrggbb / rgb()）为 0xRRGGBB；解析失败返回 null。
+ *  透明主题把 --bg（主题面板色）作为 SWCA 亚克力的 tint，避免黑/白蒙版。 */
+export function parseColorToRgbInt(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const s = value.trim();
+  const hex = /^#([0-9a-f]{6})$/i.exec(s);
+  if (hex) return parseInt(hex[1], 16);
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(s);
+  if (rgb) {
+    return (parseInt(rgb[1], 10) << 16) | (parseInt(rgb[2], 10) << 8) | parseInt(rgb[3], 10);
+  }
+  return null;
+}
+
 export interface GlassOptions {
   /** 设置了背景图且带 .glass 的元素（其 ::before 承载背景图） */
   target: HTMLElement | null;

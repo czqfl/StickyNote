@@ -402,11 +402,16 @@ body,
 .note-window.bg-transparent {
   /* 面板深浅 = 主题色按“背景不透明度”（--trans-opacity，由设置滑块实时写入）混入：
      DWM 只提供背后桌面的实时模糊（无 tint 无白蒙版），半透明面板叠在模糊上，
-     与 PowerShell 设置的行为一致（滑块调的是面板透明度，不是亚克力本身）。 */
+     与 PowerShell 设置的行为一致（滑块调的是面板透明度，不是亚克力本身）。
+     面板上限 65%（JS 写入），保证始终透出磨砂感、不变成实心白板。 */
   background: color-mix(in srgb, var(--bg) calc(var(--trans-opacity, 65) * 1%), transparent);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.14),
     inset 0 -14px 28px rgba(0, 0, 0, 0.08);
+}
+/* 背景不透明度为 0：完全透明（无模糊无面板），去掉面板边缘框线 */
+.note-window.bg-transparent.transparent-clear {
+  box-shadow: none;
 }
 /* 工具栏单独抬到 3：其下拉色板 .cc-panel(z-index:9999) 不被同级靠后的 .editor-area(z-index:1) 遮挡 */
 .note-window.bg-transparent .toolbar {
@@ -435,10 +440,17 @@ body,
   background: color-mix(in srgb, var(--bg-bar, var(--bg)) 28%, transparent);
   border-color: rgba(255, 255, 255, 0.18);
 }
-/* 透明主题下标题输入框：完全透明（无 backdrop-filter），与其余控件一致，仅保留文字阴影保证可读 */
+/* 其余按钮/按钮组与上色按钮同款“果冻”底：半透明主题色圆角底，
+   不再全透明浮在模糊上；hover/active 用更浓一档的果冻 */
+.note-window.bg-transparent .icon-btn,
+.note-window.bg-transparent .tool-md,
+.note-window.bg-transparent .tool-format {
+  background: color-mix(in srgb, var(--bg-bar, var(--bg)) 28%, transparent);
+}
+/* 透明主题下标题输入框：与其余按钮同款果冻底（半透明主题色），仅保留文字阴影保证可读 */
 .note-window.bg-transparent .title-input,
 .note-window.bg-transparent .title-input:focus {
-  background: transparent;
+  background: color-mix(in srgb, var(--bg-bar, var(--bg)) 28%, transparent);
   border-color: transparent;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
@@ -460,10 +472,10 @@ body,
   text-shadow: 0 0 3px rgba(0, 0, 0, 0.18), 0 0 8px rgba(255, 255, 255, 0.12);
 }
 .note-window.bg-transparent .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background: color-mix(in srgb, var(--bg-bar, var(--bg)) 46%, transparent);
 }
 .note-window.bg-transparent .icon-btn:active {
-  background: rgba(255, 255, 255, 0.28);
+  background: color-mix(in srgb, var(--bg-bar, var(--bg)) 58%, transparent);
 }
 /* 标题栏抓手点 */
 .note-window.bg-transparent .titlebar-grip .grip-dots {
@@ -575,9 +587,10 @@ body,
 .titlebar-left {
   flex: 1 1 auto;
   min-width: 0;
-  /* 有空间时尽量展示标题：整个左侧组（齿轮+标题）最多长到居中抓取区域
-     （50%±45px）前停下，与抓取点保持约 25px 间距，绝不与之重叠 */
-  max-width: calc(50% - 62px);
+  /* 有空间时尽量展示标题：整个左侧组（齿轮+标题）最多长到居中抓取点
+     的圆点（50%±27px）前停下，留约 5px 间距——不固定死宽度，
+     空间越大标题展示越完整；拖拽仍可用抓取点右侧区域 */
+  max-width: calc(50% - 32px);
   gap: 2px;
 }
 
@@ -601,7 +614,8 @@ body,
   margin-left: 6px;
   margin-right: 10px;
   border: 1px solid transparent;
-  background: transparent;
+  /* 与其余按钮同款“果冻”底（半透明主题色） */
+  background: color-mix(in srgb, var(--bg-bar, var(--bg)) 28%, transparent);
   color: var(--text-sub);
   font-size: 13px;
   font-weight: 600;
@@ -614,7 +628,7 @@ body,
 }
 
 .title-input:hover {
-  background: transparent;
+  background: color-mix(in srgb, var(--bg-bar, var(--bg)) 46%, transparent);
 }
 
 .title-input:focus {
@@ -1411,6 +1425,8 @@ body,
   color: var(--accent);
   font-size: 14px;
   padding: 0 3px;
+  /* 边框与右侧按钮同款（--text-sub 42% 混色）：accent 色混 42% 观感偏细，这里对齐 */
+  border: 1px solid color-mix(in srgb, var(--text-sub) 42%, transparent);
 }
 
 .icon-btn.gear:hover {

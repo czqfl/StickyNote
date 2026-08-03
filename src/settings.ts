@@ -1,5 +1,5 @@
 import { loadSettings, saveSettings, saveMdCustom, openFile, startDragging, setAcrylic } from "./api";
-import { applyGlassBlur } from "./glass";
+import { applyGlassBlur, parseColorToRgbInt } from "./glass";
 import { listen } from "@tauri-apps/api/event";
 import type { Settings } from "./types";
 
@@ -664,9 +664,8 @@ export async function openSettingsModal(): Promise<void> {
   themeSel.value = draft.theme || "light";
 
   // 透明主题实时预览：切到/切离透明时即时启停 DWM 实时模糊（零延迟）。
-  // “背景不透明度”滑块直接写 CSS 变量 --trans-opacity（面板半透明叠在模糊上），
-  // 纯前端实时生效；仅当面板运行在便签窗口内（有 .note-window）时有可视预览，
-  // 独立设置窗口由便签窗口 onSettingsChanged 在保存后接管全局生效。
+  // “背景不透明度”0% = 关闭 DWM 效果完全透明；>0% = 系统亚克力实时模糊 +
+  // 主题色面板（上限 65%，始终透出磨砂感，不变成实心白板）。拖动滑块即刻生效。
   function previewPanel(): HTMLElement | null {
     return document.querySelector(".note-window") as HTMLElement | null;
   }
@@ -686,17 +685,36 @@ export async function openSettingsModal(): Promise<void> {
     if (note) {
       note.style.display = transparent ? "" : "none";
       note.textContent = transparent
-        ? "透明主题使用系统实时模糊（无白蒙版）：模糊半径由系统固定，通过“背景不透明度”调节面板深浅。"
+        ? "透明主题为实时磨砂（系统亚克力模糊背后桌面）：“背景不透明度”0% = 完全透明无模糊；越高磨砂感越强，最高保持玻璃感（面板跟随主题色，无白色蒙版）。"
         : "";
     }
   }
-  /** 实时套用“背景不透明度”：直接写 CSS 变量，滑块拖动即刻生效（不依赖 IPC）。
-   *  同时写到 documentElement（设置浮层本身也是半透明面板，拖动时能看到变化）。 */
+  /** 实时套用“背景不透明度”：低值（<2%）关闭 DWM 效果（完全透明），≥2% 开启并写
+   *  主题色面板（--trans-opacity，0.6 × 滑块值，线性 0~60%）；SWCA tint 固定最小
+   *  alpha（Rust 侧 alpha=1），滑块拖动即刻生效（不依赖 IPC）。 */
   function applyAcrylicLive() {
     const o = normalizeOpacity(draft.transparent_opacity);
-    document.documentElement.style.setProperty("--trans-opacity", String(o));
     const panel = previewPanel();
-    if (panel) panel.style.setProperty("--trans-opacity", String(o));
+    if (o < 2) {
+      document.documentElement.style.setProperty("--trans-opacity", "0");
+      if (panel) {
+        panel.style.setProperty("--trans-opacity", "0");
+        panel.classList.add("transparent-clear");
+      }
+      setAcrylic(false, 0, 0).catch(() => {});
+      return;
+    }
+    const capped = Math.round(o * 0.6);
+    document.documentElement.style.setProperty("--trans-opacity", String(capped));
+    if (panel) {
+      panel.style.setProperty("--trans-opacity", String(capped));
+      panel.classList.remove("transparent-clear");
+    }
+    const tint =
+      parseColorToRgbInt(
+        panel ? getComputedStyle(panel).getPropertyValue("--bg") : null,
+      ) ?? 0;
+    setAcrylic(true, 1, tint).catch(() => {});
   }
   function applyTransparentPreview(transparent: boolean) {
     syncTransparentControls(transparent);
@@ -708,11 +726,11 @@ export async function openSettingsModal(): Promise<void> {
       panel.classList.remove("has-bg");
       panel.style.removeProperty("--note-bg-img");
       applyGlassBlur({ target: panel, strength: 0, enabled: false });
-      setAcrylic(true, 0, 0).catch(() => {});
     } else {
       if (panel) {
         panel.classList.remove("bg-transparent");
         panel.style.removeProperty("--trans-opacity");
+        panel.classList.remove("transparent-clear");
         applyGlassBlur({ target: panel, strength: 0, enabled: false });
       }
       setAcrylic(false, 0, 0).catch(() => {});

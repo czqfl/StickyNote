@@ -21,7 +21,7 @@ import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
 import { requestBlackHoleClose } from "./blackhole";
-import { MAX_BLUR_PX, applyGlassBlur } from "./glass";
+import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
 import { applyPanelBackground } from "./panel-bg";
 import {
   getCurrentWindow,
@@ -482,21 +482,38 @@ export function mountNoteApp(noteId: string, preset = "") {
     }
   }
 
-  /** 透明主题：开启 DWM 实时模糊（纯模糊无白蒙版），面板深浅由 CSS 变量
-   *  --trans-opacity（背景不透明度，0~100）控制——纯前端实时生效，所见即所得。
+  /** 透明主题：开启 DWM 实时模糊（SWCA 亚克力，失焦也持续模糊），
+   *  “背景不透明度”控制面板深浅：
+   *   0~1% → 关闭 DWM 效果，窗口完全透明（无模糊无面板）；
+   *   ≥2% → DWM 实时模糊（tint 固定最小 alpha，避免本机放大渲染），
+   *         + 主题色半透明面板（0.6 × 滑块值，线性 0~60%，保持磨砂玻璃感）。
    *  非透明主题时调用则关闭模糊。幂等，可反复调用。 */
   async function applyAcrylic(): Promise<void> {
     const s = await getSettings();
     if (s.theme !== "transparent") {
       noteWindow.style.removeProperty("--trans-opacity");
+      noteWindow.classList.remove("transparent-clear");
       setAcrylic(false, 0, 0).catch(() => {});
       return;
     }
     const o = normalizeOpacity(s.transparent_opacity);
-    // 同时写 documentElement：设置浮层等也按同一变量半透明，拖动滑块所见即所得
-    noteWindow.style.setProperty("--trans-opacity", String(o));
-    document.documentElement.style.setProperty("--trans-opacity", String(o));
-    setAcrylic(true, 0, 0).catch((e) => console.error("应用实时模糊失败:", e));
+    if (o < 2) {
+      // 低值 = 完全透明：关掉 DWM 效果与面板（--trans-opacity=0，不留 CSS 默认值），只留文字
+      noteWindow.classList.add("transparent-clear");
+      noteWindow.style.setProperty("--trans-opacity", "0");
+      document.documentElement.style.setProperty("--trans-opacity", "0");
+      setAcrylic(false, 0, 0).catch(() => {});
+      return;
+    }
+    noteWindow.classList.remove("transparent-clear");
+    // 面板 0.6 × 滑块值（线性 0~60%）：越高磨砂感越强，但始终透出模糊，不变成实心白板
+    const capped = Math.round(o * 0.6);
+    noteWindow.style.setProperty("--trans-opacity", String(capped));
+    document.documentElement.style.setProperty("--trans-opacity", String(capped));
+    // SWCA tint 固定最小 alpha（Rust 侧 alpha=1），此处只传主题面板色
+    const tint =
+      parseColorToRgbInt(getComputedStyle(noteWindow).getPropertyValue("--bg")) ?? 0;
+    setAcrylic(true, 1, tint).catch((e) => console.error("应用实时模糊失败:", e));
   }
 
   /** 统一套用毛玻璃强度（0~100%）：自定义背景模式下 CSS 模糊管线，
@@ -1110,9 +1127,11 @@ export function mountNoteApp(noteId: string, preset = "") {
     const s = await getSettings();
     const theme = s.theme || "light";
     const root = document.documentElement;
-    // 仅 light 不下类；dark 挂 .theme-dark；transparent 由 .bg-transparent 处理，不挂主题类。
+    // light 不下类；dark 挂 .theme-dark；transparent 也挂 theme-dark——
+    // PowerShell 深色亚克力观感：面板/tint 用深色主题变量（--bg #23232a），
+    // 避免浅色变量（米白 #fffefb）造成“白板”效果。
     root.classList.remove("theme-dark");
-    if (theme === "dark") {
+    if (theme === "dark" || theme === "transparent") {
       root.classList.add("theme-dark");
     }
   }
