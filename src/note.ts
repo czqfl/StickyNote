@@ -15,14 +15,14 @@ import {
   saveSettings,
   formatWithLLM,
   openSettingsWindow,
+  setAcrylic,
 } from "./api";
 import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
 import { requestBlackHoleClose } from "./blackhole";
-import { MAX_BLUR_PX } from "./glass";
-import { applyPanelBackground, getWallpaperDataUrl } from "./panel-bg";
-import { startRealtimeBlur, stopRealtimeBlur } from "./realtime-blur";
+import { MAX_BLUR_PX, applyGlassBlur } from "./glass";
+import { applyPanelBackground } from "./panel-bg";
 import {
   getCurrentWindow,
   PhysicalPosition,
@@ -37,6 +37,7 @@ import {
   setSettings,
   TARGET_LANGUAGES,
   normalizeGlassPct,
+  normalizeOpacity,
 } from "./settings";
 
 const SAVE_DELAY = 500;
@@ -431,15 +432,12 @@ export function mountNoteApp(noteId: string, preset = "") {
   }
 
   /** 应用/清除背景：
-   *  - 透明主题：实时截取便签背后的真实屏幕内容作背景（实时动态毛玻璃），CSS 高斯模糊；
-   *    模糊关闭或强度 0 时回到完全透明。
-   *  - 非透明：自定义背景图（优先便签自身，否则全局）+ CSS 高斯模糊。
-   *  两模式共用同一条「背景图 + CSS 模糊」管线，观感一致，只是透明模式背景实时更新。 */
+   *  - 透明主题：DWM 原生亚克力（系统合成器实时模糊便签背后的桌面，零延迟，
+   *    与 PowerShell 设置同款）；“背景不透明度”控制着色层深浅。
+   *  - 非透明：自定义背景图（优先便签自身，否则全局）+ CSS 高斯模糊。 */
   async function applyBackground() {
     const s = await getSettings();
     const transparent = s.theme === "transparent";
-    const glassEnabled = s.glass_enabled !== false;
-    const pct = normalizeGlassPct(s.glass_blur);
     const mdBody = ensurePreviewDoc()?.body ?? null;
 
     if (transparent) {
@@ -447,24 +445,25 @@ export function mountNoteApp(noteId: string, preset = "") {
       noteWindow.style.removeProperty("--note-panel-alpha");
       noteWindow.style.removeProperty("--note-bar-alpha");
       noteWindow.classList.add("bg-transparent");
-      if (glassEnabled && pct > 0) {
-        // 实时动态毛玻璃：背景 = 便签背后屏幕的实时画面
-        startRealtimeBlur(noteWindow, pct, mdBody);
-      } else {
-        stopRealtimeBlur();
-        noteWindow.classList.remove("has-bg", "on-dark-bg");
-        noteWindow.style.removeProperty("--note-bg-img");
-        noteWindow.style.removeProperty("--note-bg-opacity");
-        if (mdBody) {
-          mdBody.classList.remove("has-bg-img", "md-transparent");
-          mdBody.style.removeProperty("--md-bg-img");
-        }
+      noteWindow.classList.remove("has-bg", "on-dark-bg");
+      noteWindow.style.removeProperty("--note-bg-img");
+      noteWindow.style.removeProperty("--note-bg-opacity");
+      applyGlassBlur({ target: noteWindow, strength: 0, enabled: false });
+      // 原生亚克力：DWM 实时模糊背后屏幕（不再截屏），强度由系统固定，
+      // “背景不透明度”滑块调节着色层深浅（0 = 纯模糊完全透明）。
+      await applyAcrylic();
+      if (mdBody) {
+        mdBody.classList.add("md-transparent");
+        mdBody.classList.remove("has-bg-img");
+        mdBody.style.removeProperty("--md-bg-img");
+        mdBody.style.removeProperty("--md-bg-opacity");
+        mdBody.style.removeProperty("--md-blur");
       }
       return;
     }
 
-    // 非透明：停止实时截屏并清掉透明态
-    stopRealtimeBlur();
+    // 非透明：关掉原生亚克力并清掉透明态
+    await applyAcrylic();
     noteWindow.classList.remove("bg-transparent");
 
     const bgUrl = await resolveBgImage(s);
@@ -483,8 +482,26 @@ export function mountNoteApp(noteId: string, preset = "") {
     }
   }
 
-  /** 统一套用毛玻璃强度（0~100%）：透明主题与自定义背景共用同一套 CSS 模糊管线，
-   *  0% 原图无模糊，100% 强模糊（≈ MAX_BLUR_PX），与设置面板所见即所得。 */
+  /** 透明主题：开启 DWM 实时模糊（纯模糊无白蒙版），面板深浅由 CSS 变量
+   *  --trans-opacity（背景不透明度，0~100）控制——纯前端实时生效，所见即所得。
+   *  非透明主题时调用则关闭模糊。幂等，可反复调用。 */
+  async function applyAcrylic(): Promise<void> {
+    const s = await getSettings();
+    if (s.theme !== "transparent") {
+      noteWindow.style.removeProperty("--trans-opacity");
+      setAcrylic(false, 0, 0).catch(() => {});
+      return;
+    }
+    const o = normalizeOpacity(s.transparent_opacity);
+    // 同时写 documentElement：设置浮层等也按同一变量半透明，拖动滑块所见即所得
+    noteWindow.style.setProperty("--trans-opacity", String(o));
+    document.documentElement.style.setProperty("--trans-opacity", String(o));
+    setAcrylic(true, 0, 0).catch((e) => console.error("应用实时模糊失败:", e));
+  }
+
+  /** 统一套用毛玻璃强度（0~100%）：自定义背景模式下 CSS 模糊管线，
+   *  0% 原图无模糊，100% 强模糊（≈ MAX_BLUR_PX），与设置面板所见即所得。
+   *  透明主题下模糊半径由系统固定（原生亚克力），此处只维护背景不透明度。 */
   async function applyGlassEnabled(): Promise<void> {
     const s = await getSettings();
     const transparent = s.theme === "transparent";
@@ -492,16 +509,8 @@ export function mountNoteApp(noteId: string, preset = "") {
     const enabled = s.glass_enabled !== false;
     const { applyGlassBlur } = await import("./glass");
     if (transparent) {
-      if (enabled && pct > 0) {
-        // 实时毛玻璃：更新强度（截屏循环已在运行时保持）
-        const mdBody = ensurePreviewDoc()?.body ?? null;
-        startRealtimeBlur(noteWindow, pct, mdBody);
-      } else {
-        stopRealtimeBlur();
-        noteWindow.classList.remove("has-bg", "on-dark-bg");
-        noteWindow.style.removeProperty("--note-bg-img");
-        applyGlassBlur({ target: noteWindow, strength: 0, enabled: false });
-      }
+      // 原生亚克力：不透明度变化时刷新（无需强度，系统固定模糊半径）
+      await applyAcrylic();
       return;
     }
     applyGlassBlur({ target: noteWindow, strength: pct, enabled });
@@ -1148,9 +1157,9 @@ export function mountNoteApp(noteId: string, preset = "") {
     applyMdBackground();
   }
 
-  /** 为 Markdown 预览区套用与便签输入区统一的背景图（毛玻璃）：
-   *  透明主题：背景图由实时毛玻璃模块逐帧更新（与输入区完全一致），
-   *  首帧到来前先用壁纸兜底；模糊半径跟随毛玻璃强度设置。 */
+  /** 为 Markdown 预览区套用与便签输入区统一的背景：
+   *  透明主题：预览区完全透明，由窗口的 DWM 原生亚克力透出实时模糊背景；
+   *  非透明：背景图（与输入区同一张）+ CSS 高斯模糊。 */
   async function applyMdBackground() {
     const s = await getSettings();
     const doc = ensurePreviewDoc();
@@ -1158,12 +1167,12 @@ export function mountNoteApp(noteId: string, preset = "") {
     const transparent = s.theme === "transparent";
     const blurPx = Math.round((normalizeGlassPct(s.glass_blur) / 100) * MAX_BLUR_PX) + "px";
     if (transparent) {
-      // 类与模糊半径固定；背景图由实时毛玻璃每帧覆盖（此处先用壁纸兜底，避免首帧空白）
-      doc.body.classList.add("has-bg-img", "md-transparent");
-      doc.body.style.setProperty("--md-bg-opacity", "1");
-      doc.body.style.setProperty("--md-blur", blurPx);
-      const bg = await getWallpaperDataUrl();
-      if (bg) doc.body.style.setProperty("--md-bg-img", `url("${bg}")`);
+      // 原生亚克力由窗口级 DWM 提供，预览区无需（也不应）再画任何背景图
+      doc.body.classList.add("md-transparent");
+      doc.body.classList.remove("has-bg-img");
+      doc.body.style.removeProperty("--md-bg-img");
+      doc.body.style.removeProperty("--md-bg-opacity");
+      doc.body.style.removeProperty("--md-blur");
       return;
     }
     const bg = await resolveBgImage(s);

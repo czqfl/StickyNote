@@ -394,28 +394,16 @@ body,
   background: transparent;
 }
 
-/* ===== 透明主题：桌面壁纸做背景 + CSS 高斯模糊（与自定义背景图片同一管线）===== */
-/* 核心：透明主题把桌面壁纸当背景图画在便签上（.has-bg），毛玻璃强度就是 CSS 模糊半径，
-   与「自定义背景图片」完全一致——纯背景图 + 纯模糊，没有任何色罩/蒙版（弃用系统 Acrylic，
-   其自带 tint 正是“白蒙版”来源）。面板全部透明，文字加投影保证对比度。 */
-
-/* 实时动态毛玻璃的背景层：<img> 直接承载后端截屏帧（objectURL，零 JS 编解码），
-   filter:blur 走 GPU 合成层（--glass-blur 由毛玻璃强度控制，随设置实时渐变）。
-   背景层向外扩展 48px（容纳最大模糊半径 40px 的采样范围）：否则 blur 在图片边缘
-   采样会落到图外透明区域，出现“中间模糊、四周不模糊”的观感问题。 */
-.note-window .note-bg-live {
-  position: absolute;
-  inset: -48px;
-  width: calc(100% + 96px);
-  height: calc(100% + 96px);
-  object-fit: cover;
-  z-index: 0;
-  pointer-events: none;
-  filter: blur(var(--glass-blur, 0px));
-  transform: translateZ(0);
-}
+/* ===== 透明主题：DWM 原生亚克力（Windows 11 设置同款）===== */
+/* 核心：透明主题不再截屏，由系统合成器（DWM）直接对便签背后的实时桌面做高斯模糊，
+   零延迟、零 JS 开销；“背景不透明度”控制着色层深浅（等价 PowerShell 设置的同名滑块）。
+   模糊半径由系统固定（同系统亚克力），因此透明主题下不再有“模糊强度”配置。
+   面板全部透明，文字加投影保证对比度。 */
 .note-window.bg-transparent {
-  background: transparent;
+  /* 面板深浅 = 主题色按“背景不透明度”（--trans-opacity，由设置滑块实时写入）混入：
+     DWM 只提供背后桌面的实时模糊（无 tint 无白蒙版），半透明面板叠在模糊上，
+     与 PowerShell 设置的行为一致（滑块调的是面板透明度，不是亚克力本身）。 */
+  background: color-mix(in srgb, var(--bg) calc(var(--trans-opacity, 65) * 1%), transparent);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.14),
     inset 0 -14px 28px rgba(0, 0, 0, 0.08);
@@ -435,9 +423,9 @@ body,
 .note-window.bg-transparent .tool-format,
 .note-window.bg-transparent .translate-src,
 .note-window.bg-transparent .translate-dst {
-  background: transparent;
+  background: color-mix(in srgb, var(--bg-bar) calc(var(--trans-opacity, 65) * 1%), transparent);
   border-color: rgba(255, 255, 255, 0.16);
-  /* 不叠加 backdrop-filter：Acrylic 由 DWM 提供，控件纯透明叠上去即可，
+  /* 不叠加 backdrop-filter：模糊由 DWM 提供，控件纯半透明叠上去即可，
      避免每个控件各自做一遍 GPU 模糊合成（拖动时每帧重算 → 卡顿主因） */
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
@@ -456,7 +444,7 @@ body,
 }
 .note-window.bg-transparent .editor-area,
 .note-window.bg-transparent .editor {
-  background: transparent;
+  background: color-mix(in srgb, var(--bg) calc(var(--trans-opacity, 65) * 1%), transparent);
 }
 .note-window.bg-transparent .titlebar,
 .note-window.bg-transparent .editor-area,
@@ -1701,7 +1689,9 @@ body,
 .settings-modal {
   width: min(760px, 100%);
   max-height: calc(100vh - 32px);
-  background: var(--bg);
+  /* 透明主题下跟随“背景不透明度”半透明（--trans-opacity 由滑块实时写入），
+     拖动滑块时设置面板本身就能看到深浅变化；非透明主题未定义变量 → 不透明。 */
+  background: color-mix(in srgb, var(--bg) calc(var(--trans-opacity, 100) * 1%), transparent);
   border-radius: 12px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
   display: flex;

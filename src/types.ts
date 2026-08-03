@@ -66,6 +66,8 @@ export interface Settings {
   glass_enabled?: boolean;
   /** 毛玻璃模糊强度（px），仅 glass_enabled 开启时生效 */
   glass_blur?: number;
+  /** 透明主题“背景不透明度”（0~100%）：原生亚克力着色层强度，等价 PowerShell 设置的不透明度滑块 */
+  transparent_opacity?: number;
   /** “全部关闭（全局）”快捷键是否播放黑洞吸入动画（独立配置开关） */
   blackhole_close?: boolean;
 }

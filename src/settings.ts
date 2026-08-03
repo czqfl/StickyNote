@@ -1,6 +1,5 @@
-import { loadSettings, saveSettings, saveMdCustom, openFile, startDragging } from "./api";
+import { loadSettings, saveSettings, saveMdCustom, openFile, startDragging, setAcrylic } from "./api";
 import { applyGlassBlur } from "./glass";
-import { applyPanelBackground } from "./panel-bg";
 import { listen } from "@tauri-apps/api/event";
 import type { Settings } from "./types";
 
@@ -40,6 +39,12 @@ export const TARGET_LANGUAGES: { value: string; label: string }[] = [
 export function normalizeGlassPct(v: number | undefined | null): number {
   if (typeof v !== "number" || Number.isNaN(v)) return 55;
   if (v > 100) return Math.round((v / 40) * 100); // 旧 px -> 百分比（40px ≈ 100%）
+  return Math.max(0, Math.min(100, Math.round(v)));
+}
+
+/** 把存储的“背景不透明度”统一规范为 0~100 的整数百分比（透明主题原生亚克力着色层）。 */
+export function normalizeOpacity(v: number | undefined | null): number {
+  if (typeof v !== "number" || Number.isNaN(v)) return 65;
   return Math.max(0, Math.min(100, Math.round(v)));
 }
 
@@ -220,6 +225,7 @@ function defaultSettings(): Settings {
     bg_immersive: false,
     glass_enabled: true,
     glass_blur: 55,
+    transparent_opacity: 65,
     blackhole_close: true,
   } as Settings;
 }
@@ -355,11 +361,17 @@ export async function openSettingsModal(): Promise<void> {
               <div class="bg-img-preview" id="bg-preview"></div>
               <label class="settings-check is-mode-sensitive" id="bg-immersive-row"><input type="checkbox" id="set-bg-immersive"> 背景沉浸（标题栏、工具栏也透出背景）</label>
               <div class="settings-divider"></div>
-              <label class="settings-check"><input type="checkbox" id="set-glass"> 高斯模糊效果</label>
-              <div class="settings-row" id="glass-blur-row">
+              <label class="settings-check is-mode-sensitive" id="glass-chk-row"><input type="checkbox" id="set-glass"> 高斯模糊效果</label>
+              <div class="settings-row is-mode-sensitive" id="glass-blur-row">
                 <label class="settings-label">高斯模糊强度</label>
                 <input type="range" id="glass-blur" min="0" max="100" step="1" value="55">
                 <span class="settings-val" id="glass-blur-val">55%</span>
+              </div>
+              <!-- 透明主题专用：原生亚克力“背景不透明度”（等价 PowerShell 设置的同名滑块） -->
+              <div class="settings-row is-mode-sensitive" id="trans-opacity-row" style="display:none">
+                <label class="settings-label">背景不透明度</label>
+                <input type="range" id="trans-opacity" min="0" max="100" step="1" value="65">
+                <span class="settings-val" id="trans-opacity-val">65%</span>
               </div>
               <p class="settings-tip bg-mode-note" id="bg-mode-note" style="display:none"></p>
             </div>
@@ -651,23 +663,59 @@ export async function openSettingsModal(): Promise<void> {
   });
   themeSel.value = draft.theme || "light";
 
-  // 透明主题实时预览：切到/切离透明时即时启停毛玻璃。仅当面板运行在便签窗口内
-  // （有 .note-window）时生效；独立设置窗口不套用背景（避免模糊渲染开销造成卡顿），
-  // 由便签窗口 onSettingsChanged 在保存后接管全局生效。
+  // 透明主题实时预览：切到/切离透明时即时启停 DWM 实时模糊（零延迟）。
+  // “背景不透明度”滑块直接写 CSS 变量 --trans-opacity（面板半透明叠在模糊上），
+  // 纯前端实时生效；仅当面板运行在便签窗口内（有 .note-window）时有可视预览，
+  // 独立设置窗口由便签窗口 onSettingsChanged 在保存后接管全局生效。
   function previewPanel(): HTMLElement | null {
     return document.querySelector(".note-window") as HTMLElement | null;
   }
-  function applyTransparentPreview(transparent: boolean) {
+  /** 透明主题下：隐藏“高斯模糊强度/开关”与背景图片相关控件，显示“背景不透明度”；非透明则相反 */
+  function syncTransparentControls(transparent: boolean) {
+    const glassChkRow = overlay.querySelector("#glass-chk-row") as HTMLElement | null;
+    const glassBlurRow = overlay.querySelector("#glass-blur-row") as HTMLElement | null;
+    const transRow = overlay.querySelector("#trans-opacity-row") as HTMLElement | null;
+    if (glassChkRow) glassChkRow.style.display = transparent ? "none" : "";
+    if (glassBlurRow) glassBlurRow.style.display = transparent ? "none" : "";
+    if (transRow) transRow.style.display = transparent ? "" : "none";
+    const bgImgControls = overlay.querySelector("#bg-img-controls") as HTMLElement | null;
+    const bgImmersiveRow = overlay.querySelector("#bg-immersive-row") as HTMLElement | null;
+    if (bgImgControls) bgImgControls.style.display = transparent ? "none" : "";
+    if (bgImmersiveRow) bgImmersiveRow.style.display = transparent ? "none" : "";
+    const note = overlay.querySelector("#bg-mode-note") as HTMLElement | null;
+    if (note) {
+      note.style.display = transparent ? "" : "none";
+      note.textContent = transparent
+        ? "透明主题使用系统实时模糊（无白蒙版）：模糊半径由系统固定，通过“背景不透明度”调节面板深浅。"
+        : "";
+    }
+  }
+  /** 实时套用“背景不透明度”：直接写 CSS 变量，滑块拖动即刻生效（不依赖 IPC）。
+   *  同时写到 documentElement（设置浮层本身也是半透明面板，拖动时能看到变化）。 */
+  function applyAcrylicLive() {
+    const o = normalizeOpacity(draft.transparent_opacity);
+    document.documentElement.style.setProperty("--trans-opacity", String(o));
     const panel = previewPanel();
-    if (!panel) return;
+    if (panel) panel.style.setProperty("--trans-opacity", String(o));
+  }
+  function applyTransparentPreview(transparent: boolean) {
+    syncTransparentControls(transparent);
+    const panel = previewPanel();
     if (transparent) {
+      applyAcrylicLive();
+      if (!panel) return;
       panel.classList.add("bg-transparent");
-      applyPanelBackground(panel, { ...draft, theme: "transparent" } as Settings).catch((e) =>
-        console.error("透明预览失败:", e),
-      );
-    } else {
-      panel.classList.remove("bg-transparent");
+      panel.classList.remove("has-bg");
+      panel.style.removeProperty("--note-bg-img");
       applyGlassBlur({ target: panel, strength: 0, enabled: false });
+      setAcrylic(true, 0, 0).catch(() => {});
+    } else {
+      if (panel) {
+        panel.classList.remove("bg-transparent");
+        panel.style.removeProperty("--trans-opacity");
+        applyGlassBlur({ target: panel, strength: 0, enabled: false });
+      }
+      setAcrylic(false, 0, 0).catch(() => {});
     }
   }
   themeSel.addEventListener("change", () => {
@@ -781,6 +829,19 @@ export async function openSettingsModal(): Promise<void> {
     applyGlassLive(Number(glassBlurInput.value));
   });
   applyGlassLive(normalizeGlassPct(draft.glass_blur));
+
+  // ---- 透明主题“背景不透明度”（原生亚克力着色层，PowerShell 设置同款滑块）----
+  const transOpacityInput = overlay.querySelector("#trans-opacity") as HTMLInputElement;
+  const transOpacityVal = overlay.querySelector("#trans-opacity-val") as HTMLSpanElement;
+  transOpacityInput.value = String(normalizeOpacity(draft.transparent_opacity));
+  transOpacityVal.textContent = normalizeOpacity(draft.transparent_opacity) + "%";
+  transOpacityInput.addEventListener("input", () => {
+    draft.transparent_opacity = Number(transOpacityInput.value);
+    transOpacityVal.textContent = transOpacityInput.value + "%";
+    applyAcrylicLive();
+  });
+  // 初始按当前主题同步控件可见性（透明主题隐藏强度配置、显示不透明度）并实时预览
+  applyTransparentPreview(draft.theme === "transparent");
 
   // ---- 黑洞关闭动画开关（独立配置，不再作为单独快捷键）----
   const blackholeChk = overlay.querySelector("#set-blackhole") as HTMLInputElement;
@@ -965,6 +1026,7 @@ export async function openSettingsModal(): Promise<void> {
     draft.bg_immersive = bgImmersiveChk.checked;
     draft.glass_enabled = glassChk.checked;
     draft.glass_blur = Number(glassBlurInput.value);
+    draft.transparent_opacity = Number(transOpacityInput.value);
     draft.blackhole_close = blackholeChk.checked;
     try {
       await saveSettings(draft);
