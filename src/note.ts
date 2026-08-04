@@ -20,7 +20,8 @@ import {
 import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
-import { requestBlackHoleClose } from "./blackhole";
+import { requestParticleDissolveClose } from "./dissolve";
+import { playSummonMaterialize, cancelSummon } from "./summon";
 import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
 import { applyPanelBackground } from "./panel-bg";
 import {
@@ -458,6 +459,15 @@ export function mountNoteApp(noteId: string, preset = "") {
         mdBody.style.removeProperty("--md-bg-img");
         mdBody.style.removeProperty("--md-bg-opacity");
         mdBody.style.removeProperty("--md-blur");
+        // 透明主题：预览 body 也要透出亚克力模糊，叠一层半透明面板色保证文字可读。
+        // 默认 CSS 给 body 写了 opaque var(--bg)，这里覆盖为与编辑区一致的玻璃观感。
+        const tv = getComputedStyle(document.documentElement)
+          .getPropertyValue("--trans-opacity")
+          .trim();
+        mdBody.style.background =
+          tv === "0"
+            ? "transparent"
+            : `color-mix(in srgb, var(--bg) ${tv}%, transparent)`;
       }
       return;
     }
@@ -465,6 +475,10 @@ export function mountNoteApp(noteId: string, preset = "") {
     // 非透明：关掉原生亚克力并清掉透明态
     await applyAcrylic();
     noteWindow.classList.remove("bg-transparent");
+    // 清除透明主题在预览 body 上留的 inline 背景色
+    if (mdBody) {
+      mdBody.style.removeProperty("background");
+    }
 
     const bgUrl = await resolveBgImage(s);
     await applyPanelBackground(noteWindow, s, { bgUrl: bgUrl || undefined });
@@ -747,8 +761,35 @@ export function mountNoteApp(noteId: string, preset = "") {
   });
   // 呼出键 / 托盘“显示便签”触发的事件：若当前处于贴边收起状态，则弹出
   // （非悬停触发，弹出后不做“鼠标是否已离开”的自动收起，避免误收起）
+  // 呼出动画标记：便签被隐藏（消散/托盘）后置 true，下次呼出播放粒子成形动画；
+  // 仅记录“隐藏→呼出”这一种转移，已可见的便签收到 summoned 不重复动画。
+  let wasHidden = false;
   appWindow.listen("summoned", () => {
     if (collapsed) expandFromEdge(false);
+    // 呼出动画：仅从“隐藏态”呼出时播放（隐藏时窗口保持空画面），
+    // 已可见的便签不重复动画；关闭动画播放中也不插入
+    if (wasHidden && !closing) {
+      wasHidden = false;
+      if (noteWindow.classList.contains("bg-transparent")) {
+        // 透明主题：无粒子特效，直接复原便签显示（窗口已由后端显示）
+        noteWindow.style.clipPath = "";
+        noteWindow.style.boxShadow = "";
+        noteWindow.style.opacity = "";
+        // 关闭后 50ms 内立刻呼出时亚克力还没恢复：立即补上，
+        // 避免等定时器在可见窗口上触发 SWCA 造成卡顿 + 模糊晚到
+        if (acrylicOffPending) {
+          acrylicOffPending = false;
+          applyAcrylic().catch(() => {});
+        }
+        return;
+      }
+      // 非透明主题：按粒子强度设置启动呼出动画
+      getSettings()
+        .then((s) =>
+          playSummonMaterialize(noteWindow, s.particle_intensity ?? 50),
+        )
+        .catch(() => playSummonMaterialize(noteWindow));
+    }
   });
 
   // ---- 富文本格式化 ----
@@ -1186,15 +1227,24 @@ export function mountNoteApp(noteId: string, preset = "") {
     const transparent = s.theme === "transparent";
     const blurPx = Math.round((normalizeGlassPct(s.glass_blur) / 100) * MAX_BLUR_PX) + "px";
     if (transparent) {
-      // 原生亚克力由窗口级 DWM 提供，预览区无需（也不应）再画任何背景图
+      // 原生亚克力由窗口级 DWM 提供，预览区 body 透明 + 半透面板色，与编辑区观感一致
       doc.body.classList.add("md-transparent");
       doc.body.classList.remove("has-bg-img");
       doc.body.style.removeProperty("--md-bg-img");
       doc.body.style.removeProperty("--md-bg-opacity");
       doc.body.style.removeProperty("--md-blur");
+      const tv = getComputedStyle(document.documentElement)
+        .getPropertyValue("--trans-opacity")
+        .trim();
+      doc.body.style.background =
+        tv === "0"
+          ? "transparent"
+          : `color-mix(in srgb, var(--bg) ${tv}%, transparent)`;
       return;
     }
     const bg = await resolveBgImage(s);
+    // 非透明主题：清除透明主题在预览 body 上留的 inline 背景色
+    doc.body.style.removeProperty("background");
     if (bg) {
       doc.body.classList.add("has-bg-img");
       doc.body.classList.remove("md-transparent");
@@ -1885,6 +1935,12 @@ export function mountNoteApp(noteId: string, preset = "") {
   });
 
   btnTray.addEventListener("click", () => {
+    // 隐藏前先进入"空画面"状态：下次呼出时粒子成形动画从空开始，不闪出旧内容。
+    // 若呼出动画正在播放，先取消收尾复原，再统一置空隐藏。
+    cancelSummon();
+    noteWindow.style.clipPath = "inset(0 0 100% 0)";
+    noteWindow.style.boxShadow = "none";
+    wasHidden = true;
     minimizeToTray().catch((e) => console.error("最小化到托盘失败:", e));
   });
 
@@ -1892,34 +1948,53 @@ export function mountNoteApp(noteId: string, preset = "") {
     requestAnimatedClose();
   });
 
-  /** 关闭窗口：按 blackhole_close 配置决定行为。
-   *  - 启用：播放黑洞吸入动画，结束后标记关闭并真正关闭/隐藏窗口；
-   *  - 未启用：直接标记关闭并关闭/隐藏窗口（无动画）。
+  /** 关闭窗口：先播放粒子消散动画（鸿蒙通知删除同款），结束后标记关闭并真正关闭/隐藏窗口。
    * 主窗口关闭是“隐藏到托盘”（JS 上下文不销毁），因此 closing/finished 必须在每次
-   * 关闭完成后复位，否则主窗口再次显示后关闭按钮会永久失效、黑洞也不再触发。 */
+   * 关闭完成后复位，否则主窗口再次显示后关闭按钮会永久失效。 */
   let closing = false;
   let finished = false;
+  /** 关闭后亚克力尚未恢复的窗口期：此期间呼出需立即补上亚克力，
+   *  否则窗口显示时无模糊、等定时器在可见窗口上触发 SWCA 才模糊（卡顿+模糊晚到）。 */
+  let acrylicOffPending = false;
   function requestAnimatedClose() {
     if (closing) return;
+    // 呼出动画若在播放，先立即收尾复原页面，避免两个动画同时改 clip-path
+    cancelSummon();
     closing = true;
-    finished = false; // 允许本次关闭；动画与看门狗只应触发一次真正关闭
+    finished = false;
     const finish = () => {
       closing = false; // 复位：主窗口隐藏后上下文仍在，必须复位
       if (finished) return;
       finished = true;
+      // 透明主题的 DWM 亚克力在窗口隐藏时会重新合成，出现"便签缩小一下"的残影：
+      // 隐藏前先关掉亚克力，隐藏后立刻恢复（50ms 内，窗口不可见无感知）——
+      // 保证下次呼出瞬间模糊已就绪，不会在可见窗口上触发 SWCA 造成卡顿。
+      setAcrylic(false, 0, 0).catch(() => {});
+      acrylicOffPending = true;
+      // 记录"已隐藏"：下次呼出时播放粒子成形动画（隐藏后窗口保持空画面）
+      wasHidden = true;
       // 先真正关闭/隐藏窗口（关键路径，绝不被标记逻辑阻断），再异步标记已关闭
       closeWindow().catch((e) => console.error("关闭失败:", e));
       markNoteClosed(noteId).catch(() => {});
+      window.setTimeout(() => {
+        applyAcrylic()
+          .catch(() => {})
+          .finally(() => {
+            acrylicOffPending = false;
+          });
+      }, 50);
     };
+    // 透明主题：无粒子特效，直接隐藏（亚克力常驻整窗，无需动画遮罩）
+    if (noteWindow.classList.contains("bg-transparent")) {
+      finish();
+      return;
+    }
+    // 非透明主题：按粒子强度设置启动关闭动画（强度从设置读取，失败回退默认 50）
     getSettings()
-      .then((s) => {
-        if (s.blackhole_close !== false) {
-          requestBlackHoleClose(finish);
-        } else {
-          finish();
-        }
-      })
-      .catch(() => finish());
+      .then((s) =>
+        requestParticleDissolveClose(finish, s.particle_intensity ?? 50),
+      )
+      .catch(() => requestParticleDissolveClose(finish));
   }
 
   // 用户重新输入内容 → 若此前被删除过，视为重新创建，解除删除态
@@ -1967,7 +2042,7 @@ export function mountNoteApp(noteId: string, preset = "") {
     })
     .catch((e) => console.error("监听删除事件失败:", e));
 
-  // “全部关闭（全局）”快捷键（且开启黑洞动画）由后端向每个可见窗口广播该事件，触发黑洞吸入动画后再真正关闭
+  // “全部关闭（全局）”快捷键由后端向每个可见窗口广播该事件，各窗口播放粒子消散动画后再关闭
   getCurrentWindow()
     .listen("play-close-anim", () => {
       requestAnimatedClose();

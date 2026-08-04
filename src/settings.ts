@@ -226,7 +226,7 @@ function defaultSettings(): Settings {
     glass_enabled: true,
     glass_blur: 55,
     transparent_opacity: 65,
-    blackhole_close: true,
+    particle_intensity: 50,
   } as Settings;
 }
 
@@ -345,6 +345,11 @@ export async function openSettingsModal(): Promise<void> {
                 <span class="theme-preview" id="theme-preview"></span>
               </div>
               <label class="settings-check"><input type="checkbox" id="set-edge-snap"> 贴边自动收起 / 弹出（QQ 风格）</label>
+              <div class="settings-row">
+                <label class="settings-label">粒子强度</label>
+                <input type="range" id="particle-intensity" min="0" max="100" step="1" value="50">
+                <span class="settings-val" id="particle-intensity-val">50</span>
+              </div>
             </div>
           </section>
 
@@ -374,13 +379,6 @@ export async function openSettingsModal(): Promise<void> {
                 <span class="settings-val" id="trans-opacity-val">65%</span>
               </div>
               <p class="settings-tip bg-mode-note" id="bg-mode-note" style="display:none"></p>
-            </div>
-          </section>
-
-          <section class="settings-pane active" id="pane-anim">
-            <div class="settings-section">
-              <h3 class="settings-h3">动画效果</h3>
-              <label class="settings-check"><input type="checkbox" id="set-blackhole"> 关闭时播放黑洞吸入动画（"全部关闭（全局）"快捷键触发）</label>
             </div>
           </section>
 
@@ -745,6 +743,13 @@ export async function openSettingsModal(): Promise<void> {
   // ---- 靠边自动收起 ----
   const edgeSnapChk = overlay.querySelector("#set-edge-snap") as HTMLInputElement;
   edgeSnapChk.checked = draft.edge_snap !== false;
+  const particleIntensitySlider = overlay.querySelector("#particle-intensity") as HTMLInputElement;
+  const particleIntensityVal = overlay.querySelector("#particle-intensity-val") as HTMLElement;
+  particleIntensitySlider.value = String(draft.particle_intensity ?? 50);
+  particleIntensityVal.textContent = String(draft.particle_intensity ?? 50);
+  particleIntensitySlider.addEventListener("input", () => {
+    particleIntensityVal.textContent = particleIntensitySlider.value;
+  });
 
   // ---- 全局默认背景图 ----
   const bgUploadBtn = overlay.querySelector("#bg-upload") as HTMLButtonElement;
@@ -860,13 +865,6 @@ export async function openSettingsModal(): Promise<void> {
   });
   // 初始按当前主题同步控件可见性（透明主题隐藏强度配置、显示不透明度）并实时预览
   applyTransparentPreview(draft.theme === "transparent");
-
-  // ---- 黑洞关闭动画开关（独立配置，不再作为单独快捷键）----
-  const blackholeChk = overlay.querySelector("#set-blackhole") as HTMLInputElement;
-  blackholeChk.checked = draft.blackhole_close !== false;
-  blackholeChk.addEventListener("change", () => {
-    draft.blackhole_close = blackholeChk.checked;
-  });
 
   // 上传/替换：读取 CSS 文本写入磁盘文件，并记录路径与原始文件名（立即持久化，确保记住）
   mdUploadBtn.addEventListener("click", () => mdFileInput.click());
@@ -1037,6 +1035,7 @@ export async function openSettingsModal(): Promise<void> {
     draft.md_theme = mdThemeSel.value;
     draft.theme = themeSel.value;
     draft.edge_snap = edgeSnapChk.checked;
+    draft.particle_intensity = Number(particleIntensitySlider.value);
     draft.llm_base_url = llmBase.value.trim();
     draft.llm_api_key = llmKey.value.trim();
     draft.llm_model = llmModel.value.trim();
@@ -1045,7 +1044,6 @@ export async function openSettingsModal(): Promise<void> {
     draft.glass_enabled = glassChk.checked;
     draft.glass_blur = Number(glassBlurInput.value);
     draft.transparent_opacity = Number(transOpacityInput.value);
-    draft.blackhole_close = blackholeChk.checked;
     try {
       await saveSettings(draft);
       cached = JSON.parse(JSON.stringify(draft));

@@ -396,9 +396,9 @@ struct Settings {
     /// （CSS --trans-opacity，color-mix），与 PowerShell 设置的“背景不透明度”同款。
     #[serde(default = "default_transparent_opacity")]
     transparent_opacity: f64,
-    /// “全部关闭（全局）”快捷键是否播放黑洞吸入动画（独立配置开关）
-    #[serde(default = "default_true")]
-    blackhole_close: bool,
+    /// 粒子效果强度 0~100（关闭/呼出动画的粒子数量）：默认 50，上限 100。
+    #[serde(default = "default_particle_intensity")]
+    particle_intensity: f64,
 }
 
 fn default_bg_glass_opacity() -> f64 {
@@ -415,6 +415,10 @@ fn default_glass_blur() -> f64 {
 
 fn default_transparent_opacity() -> f64 {
     65.0
+}
+
+fn default_particle_intensity() -> f64 {
+    50.0
 }
 
 impl Default for Settings {
@@ -454,7 +458,7 @@ impl Default for Settings {
             glass_enabled: true,
             glass_blur: 16.0,
             transparent_opacity: 65.0,
-            blackhole_close: true,
+            particle_intensity: 50.0,
         }
     }
 }
@@ -1336,7 +1340,7 @@ fn dispatch_shortcut(app: &AppHandle, id: u32) {
             .values()
             .any(|w| w.is_visible().unwrap_or(false));
         if any_visible {
-            close_all_with_anim(app, &settings);
+            close_all_with_anim(app);
         } else {
             show_all_open(app, false);
         }
@@ -1349,29 +1353,23 @@ fn dispatch_shortcut(app: &AppHandle, id: u32) {
     for action in matched {
         match action {
             ShortcutAction::Show => show_all_open(app, false),
-            ShortcutAction::CloseAll => close_all_with_anim(app, &settings),
+            ShortcutAction::CloseAll => close_all_with_anim(app),
             ShortcutAction::NewNote => quick_new_note(app),
         }
     }
 }
 
-/// “全部关闭”：按 blackhole_close 配置决定行为。
-/// - 启用：向每个可见便签窗口广播 play-close-anim，由各窗口自行播放黑洞吸入动画后再关闭（前端处理）。
-/// - 未启用：直接把所有便签窗口隐藏到托盘（保留进程，可再次呼出）。
-/// 辅助窗口（设置/历史）不受影响。
-fn close_all_with_anim(app: &AppHandle, settings: &Settings) {
-    if settings.blackhole_close {
-        for (_label, win) in app.webview_windows() {
-            if !win.is_visible().unwrap_or(false) {
-                continue;
-            }
-            if matches!(win.label(), "settings" | "history") {
-                continue;
-            }
-            let _ = win.emit("play-close-anim", ());
+/// “全部关闭”：向每个可见便签窗口广播 play-close-anim，由各窗口自行播放
+/// 关闭动画（粒子消散）后再隐藏到托盘。辅助窗口（设置/历史）不受影响。
+fn close_all_with_anim(app: &AppHandle) {
+    for (_label, win) in app.webview_windows() {
+        if !win.is_visible().unwrap_or(false) {
+            continue;
         }
-    } else {
-        let _ = close_all_notes(app.clone());
+        if matches!(win.label(), "settings" | "history") {
+            continue;
+        }
+        let _ = win.emit("play-close-anim", ());
     }
 }
 
@@ -1429,7 +1427,6 @@ async fn create_note_window(
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
-    setup_rounded_window(&win);
     let _ = win.show();
     let _ = win.set_focus();
     Ok(())
@@ -1440,6 +1437,10 @@ async fn open_note_window(app: AppHandle, id: String) -> Result<(), String> {
     mark_note_open_inner(&id);
     rebuild_tray_menu(&app);
     ensure_note_window(&app, &id);
+    // 通知前端播放粒子成形呼出动画（与 show_all_open / 托盘点击同一事件）
+    if let Some(win) = app.get_webview_window(&id) {
+        let _ = win.emit("summoned", ());
+    }
     Ok(())
 }
 
@@ -1486,7 +1487,6 @@ fn ensure_note_window(app: &AppHandle, id: &str) {
             None => builder.center(),
         };
         if let Ok(win) = builder.build() {
-            setup_rounded_window(&win);
             let _ = win.show();
             let _ = win.set_focus();
         }
@@ -1582,7 +1582,6 @@ fn quick_new_note(app: &AppHandle) {
             .skip_taskbar(true)
             .build()
         {
-            setup_rounded_window(&win);
             let _ = win.show();
             let _ = win.set_focus();
         }
@@ -1653,7 +1652,6 @@ async fn open_history_window(app: AppHandle) -> Result<(), String> {
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
-    setup_rounded_window(&win);
     let _ = win.show();
     let _ = win.set_focus();
     Ok(())
@@ -1813,31 +1811,6 @@ fn capture_screen_region(x: i32, y: i32, w: i32, h: i32, scale: f32) -> Result<R
     }
 }
 
-/// 设置调用方窗口是否从系统截屏中排除（WDA_EXCLUDEFROMCAPTURE）。
-/// 透明主题开启实时毛玻璃时启用，避免把便签自身内容拍进背景产生重影。
-#[tauri::command]
-fn set_exclude_from_capture(window: tauri::WebviewWindow, enable: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
-        };
-        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
-        // windows crate 的 HWND 与 windows-sys 的 HWND 底层都是 *mut c_void
-        let raw: windows_sys::Win32::Foundation::HWND = hwnd.0 as _;
-        let affinity = if enable { WDA_EXCLUDEFROMCAPTURE } else { 0 };
-        unsafe {
-            SetWindowDisplayAffinity(raw, affinity);
-        }
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (window, enable);
-        Ok(())
-    }
-}
-
 /// 原生亚克力毛玻璃（PowerShell 设置同款 DWM 效果）：
 /// 直接调 SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)（SWCA）：
 /// - 与焦点无关：便签失焦也持续模糊（SYSTEMBACKDROP 亚克力失焦即停止渲染模糊，
@@ -1954,38 +1927,15 @@ fn set_acrylic(
     }
 }
 
-/// 为便签 / 历史窗口启用圆角：Windows 11 用 DWM 原生圆角
-/// （DWMWA_WINDOW_CORNER_PREFERENCE，PowerShell 设置同款）：连 DWM 亚克力背景
-/// 一起裁成圆角。注意不能与 SetWindowRgn 混用（叠加会产生 10px 偏移错位），
-/// 且区域不会自动跟随缩放——但原生圆角由 DWM 维护，无需监听 Resized。
-fn setup_rounded_window(win: &tauri::WebviewWindow) {
-    #[cfg(target_os = "windows")]
-    {
-        apply_dwm_rounded_corners(win);
-    }
-}
-
-/// 尝试用 DWM 原生圆角（Win11 专属，attr 33 = DWMWA_WINDOW_CORNER_PREFERENCE，
-/// 2 = DWMWCP_ROUND）。原生圆角会连亚克力背景一起裁切，恢复 PowerShell 设置同款观感。
-fn apply_dwm_rounded_corners(win: &tauri::WebviewWindow) {
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-        const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-        const DWMWCP_ROUND: i32 = 2;
-        let Ok(hwnd) = win.hwnd() else { return };
-        let raw: windows_sys::Win32::Foundation::HWND = hwnd.0 as _;
-        unsafe {
-            let pref = DWMWCP_ROUND;
-            DwmSetWindowAttribute(
-                raw,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-                (&pref as *const i32).cast(),
-                std::mem::size_of::<i32>() as u32,
-            );
-        }
-    }
-}
+// ===== 为什么不用 DWM 原生圆角（DWMWA_WINDOW_CORNER_PREFERENCE = ROUND）=====
+// 历史教训：圆角窗口的边界会被 DWM 画一圈细描边轮廓，透明内容（粒子消散动画
+// 把面板裁剪掉后）上会残留成“边框”。曾用“动画期间临时关圆角、结束恢复”的方式
+// 规避，但打开便签后立刻关闭时，前端初始化仍在进行（SWCA 亚克力等组合调用
+// 可能晚于关圆角到达），圆角描边随时会在动画中复活——竞态无法彻底消除。
+// 因此这里不再初始化 DWM 圆角：窗口保持直角，圆角完全由 CSS border-radius 负责
+// （.note-window 自带 14px 圆角面板），动画期间不存在任何圆角描边，也就没有
+// 需要开关的边框。代价：透明主题下 SWCA 亚克力区域是矩形，四个角会比面板
+// 多出极小的模糊三角（无着色），肉眼几乎不可辨。
 
 /// 打开独立的“设置”窗口：与历史窗口完全相同的建法（透明无边框、可见性在 build 之后打开）。/// 关键：build 时 visible(false)，等 webview 初始化完成后再 show()——若在 build 时直接
 /// visible(true)（旧写法），WebView2 初始化与页面导航存在竞态，窗口会停在 about:blank
@@ -2085,12 +2035,6 @@ fn main() {
             // ---- 按“打开中”的便签集合呼出：启动只弹出一个便签（默认 / 第一个）----
             show_all_open(app.handle(), true);
 
-            // 主窗口由 tauri.conf.json 的 windows 配置创建（不走代码 builder），
-            // 这里补上圆角裁剪；其余便签/历史窗口在各构建点已 setup_rounded_window。
-            if let Some(win) = app.get_webview_window("main") {
-                setup_rounded_window(&win);
-            }
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2128,7 +2072,6 @@ fn main() {
             delete_bg_image,
             get_wallpaper,
             capture_screen_region,
-            set_exclude_from_capture,
             set_acrylic,
             open_settings_window,
         ])

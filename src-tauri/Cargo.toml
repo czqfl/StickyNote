@@ -29,6 +29,6 @@ reqwest = { version = "0.12", features = ["json"] }
 sha2 = "0.10"
 arboard = "3"
 # 透明主题原生亚克力：SetWindowCompositionAttribute（未文档化 API，运行时 GetProcAddress）
-# + Win11 原生圆角（DwmSetWindowAttribute DWMWA_WINDOW_CORNER_PREFERENCE）
-windows-sys = { version = "0.59", features = ["Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_LibraryLoader"] }
+# 圆角由 CSS border-radius 负责，不再使用 DWM 圆角（见 main.rs 说明）
+windows-sys = { version = "0.59", features = ["Win32_Graphics_Gdi", "Win32_Foundation", "Win32_System_LibraryLoader"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

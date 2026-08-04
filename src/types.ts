@@ -68,8 +68,8 @@ export interface Settings {
   glass_blur?: number;
   /** 透明主题“背景不透明度”（0~100%）：原生亚克力着色层强度，等价 PowerShell 设置的不透明度滑块 */
   transparent_opacity?: number;
-  /** “全部关闭（全局）”快捷键是否播放黑洞吸入动画（独立配置开关） */
-  blackhole_close?: boolean;
+  /** 粒子效果强度 0~100（关闭/呼出动画的粒子数量），默认 50 */
+  particle_intensity?: number;
 }
 
 export interface TranslateResult {

@@ -158,11 +158,6 @@ export async function captureScreenRegion(
   return res instanceof Uint8Array ? res : new Uint8Array(res as ArrayBuffer);
 }
 
-/** 设置本窗口是否从系统截屏中排除（避免把便签自身拍进毛玻璃底图产生重影）。 */
-export async function setExcludeFromCapture(enable: boolean): Promise<void> {
-  return invoke("set_exclude_from_capture", { enable });
-}
-
 /** 原生亚克力（DWM 实时毛玻璃，零截屏延迟，Windows 11 设置同款）：
  *  enable 总开关；opacity 0~255 等价“背景不透明度”（0 = 纯模糊无着色）；
  *  tintRgb 为着色色值 0xRRGGBB（配合主题色）。 */
