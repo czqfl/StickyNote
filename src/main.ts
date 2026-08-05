@@ -2,6 +2,7 @@ import "./styles.css";
 import { mountNoteApp } from "./note";
 import { mountHistoryApp } from "./history";
 import { openSettingsModal } from "./settings";
+import { mountImageViewer } from "./image-viewer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // 全局错误兜底：任何未捕获异常都显示出来，避免静默空白/卡死难以排查。
@@ -36,6 +37,9 @@ if (label === "history") {
 } else if (label === "settings") {
   // 独立“设置”窗口（窗口由后端按历史窗口同款建法创建）：只打开设置面板
   openSettingsModal().catch((e) => console.error("设置面板加载失败:", e));
+} else if (label === "imageviewer") {
+  // 独立图片预览窗口：双击便签图片时由后端 open_image_viewer 命令创建
+  mountImageViewer().catch((e) => console.error("图片预览加载失败:", e));
 } else {
   mountNoteApp(noteId, preset);
 }

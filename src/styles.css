@@ -2353,5 +2353,77 @@ body,
   color: var(--accent);
 }
 
+/* ===== 图片预览独立窗口（label=imageviewer）===== */
+.iv-root {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
+}
+.iv-stage {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+}
+.iv-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: 0 10px 50px rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+}
+.iv-nav {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 52px;
+  height: 52px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 30px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.iv-nav:hover { background: rgba(255, 255, 255, 0.3); }
+.iv-prev { left: 18px; }
+.iv-next { right: 18px; }
+.iv-close {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.iv-close:hover { background: rgba(255, 255, 255, 0.3); }
+.iv-count {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 4px 14px;
+  border-radius: 20px;
+  font: 13px/1.4 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
 
 

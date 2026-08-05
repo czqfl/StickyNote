@@ -31,6 +31,7 @@ import {
   currentMonitor,
 } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
+import { invoke } from "@tauri-apps/api/core";
 import {
   getSettings,
   getShortcut,
@@ -356,68 +357,23 @@ export function mountNoteApp(noteId: string, preset = "") {
     }
   }
 
-  // ---- 图片预览：双击编辑区/译文区图片弹出大图，支持左右切换 ----
-  let ipEl: HTMLElement | null = null;
-  let ipImg: HTMLImageElement | null = null;
-  let ipList: HTMLImageElement[] = [];
-  let ipIdx = 0;
-  function ensureImagePreview(): void {
-    if (ipEl) return;
-    ipEl = document.createElement("div");
-    ipEl.className = "img-preview";
-    ipEl.innerHTML =
-      '<button class="ip-close" type="button" title="关闭">✕</button>' +
-      '<button class="ip-nav ip-prev" type="button" title="上一张">‹</button>' +
-      '<img alt="预览">' +
-      '<button class="ip-nav ip-next" type="button" title="下一张">›</button>' +
-      '<div class="ip-count"></div>';
-    ipImg = ipEl.querySelector("img");
-    document.body.appendChild(ipEl);
-    ipEl.querySelector(".ip-close")!.addEventListener("click", closeImagePreview);
-    ipEl.querySelector(".ip-prev")!.addEventListener("click", () => stepImage(-1));
-    ipEl.querySelector(".ip-next")!.addEventListener("click", () => stepImage(1));
-    ipEl.addEventListener("click", (e) => { if (e.target === ipEl) closeImagePreview(); });
-    document.addEventListener("keydown", onImageKey);
-  }
-  function openImagePreview(imgs: HTMLImageElement[], idx: number): void {
-    ensureImagePreview();
-    ipList = imgs;
-    ipIdx = idx;
-    renderImagePreview();
-    ipEl!.classList.add("open");
-  }
-  function renderImagePreview(): void {
-    if (!ipEl || !ipImg) return;
-    const cur = ipList[ipIdx];
-    if (cur) ipImg.src = cur.src;
-    const count = ipEl.querySelector(".ip-count");
-    if (count) count.textContent = `${ipIdx + 1} / ${ipList.length}`;
-  }
-  function stepImage(d: number): void {
-    if (ipList.length === 0) return;
-    ipIdx = (ipIdx + d + ipList.length) % ipList.length;
-    renderImagePreview();
-  }
-  function closeImagePreview(): void {
-    ipEl?.classList.remove("open");
-  }
-  function onImageKey(e: KeyboardEvent): void {
-    if (!ipEl || !ipEl.classList.contains("open")) return;
-    if (e.key === "Escape") closeImagePreview();
-    else if (e.key === "ArrowLeft") stepImage(-1);
-    else if (e.key === "ArrowRight") stepImage(1);
-  }
+  // ---- 图片预览：双击图片在独立窗口中打开（避免便签窗口过小看不清）----
   function setupImagePreview(): void {
     const onDbl = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       const img = target.closest("img") as HTMLImageElement | null;
       if (!img) return;
+      // markdown 预览区是独立 iframe，跨文档隔离，暂不纳入
+      if (img.closest(".md-preview")) return;
       const imgs = Array.from(
         document.querySelectorAll(".editor img, .translate-dst img")
       ) as HTMLImageElement[];
       const idx = imgs.indexOf(img);
       if (idx < 0) return;
-      openImagePreview(imgs, idx);
+      const urls = imgs.map((m) => m.src);
+      invoke("open_image_viewer", { urls, index: idx }).catch((err) =>
+        console.error("打开图片预览失败:", err)
+      );
     };
     editor.addEventListener("dblclick", onDbl);
     const tr = document.getElementById("translate-dst");

@@ -8,10 +8,11 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri::ipc::Response;
@@ -1937,6 +1938,56 @@ fn set_acrylic(
 // 需要开关的边框。代价：透明主题下 SWCA 亚克力区域是矩形，四个角会比面板
 // 多出极小的模糊三角（无着色），肉眼几乎不可辨。
 
+// ===== 图片预览独立窗口 =====
+// 双击便签图片时，前端把图片 URL 列表（及当前序号）暂存到 ViewerState，再调用本命令
+// 打开一个 label="imageviewer" 的独立窗口；该窗口的前端视图拉取 ViewerState 并展示大图，
+// 避免在小便签窗口内挤一个看不清的预览弹层。
+#[derive(Clone, Serialize)]
+struct ViewerData {
+    urls: Vec<String>,
+    index: usize,
+}
+struct ViewerState(Mutex<Option<ViewerData>>);
+
+#[tauri::command]
+fn open_image_viewer(
+    app: AppHandle,
+    state: State<ViewerState>,
+    urls: Vec<String>,
+    index: usize,
+) -> Result<(), String> {
+    *state.0.lock().unwrap() = Some(ViewerData { urls, index });
+    const LABEL: &str = "imageviewer";
+    if let Some(win) = app.get_webview_window(LABEL) {
+        // 窗口已存在：刷新暂存数据并通知前端重新拉取
+        let _ = win.emit("viewer-reload", ());
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    let win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
+        .title("图片预览")
+        .decorations(true)
+        .transparent(false)
+        .resizable(true)
+        .always_on_top(true)
+        .inner_size(900.0, 680.0)
+        .min_inner_size(360.0, 300.0)
+        .center()
+        .visible(false)
+        .shadow(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let _ = win.show();
+    let _ = win.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_viewer_data(state: State<ViewerState>) -> Option<ViewerData> {
+    state.0.lock().unwrap().take()
+}
+
 /// 打开独立的“设置”窗口：与历史窗口完全相同的建法（透明无边框、可见性在 build 之后打开）。/// 关键：build 时 visible(false)，等 webview 初始化完成后再 show()——若在 build 时直接
 /// visible(true)（旧写法），WebView2 初始化与页面导航存在竞态，窗口会停在 about:blank
 /// 一片白、内容永远不加载（即长期“设置窗口白面板”的根因）。
@@ -2074,7 +2125,10 @@ fn main() {
             capture_screen_region,
             set_acrylic,
             open_settings_window,
+            open_image_viewer,
+            get_viewer_data,
         ])
+        .manage(ViewerState(Mutex::new(None)))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
