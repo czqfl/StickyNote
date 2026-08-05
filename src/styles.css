@@ -1838,6 +1838,40 @@ body,
   background: transparent;
   box-shadow: none;
 }
+/* 透明模式可读性：亚克力磨砂底色取决于桌面壁纸、深浅不可控；若桌面偏亮，
+   浅色文字（.theme-dark 下 --text 为白）叠在薄半透控件底上会糊。故透明模式把
+   分区/导航/头部/输入框/下拉触发器的背景提高到接近不透明以压住亚克力，并给文字
+   加投影，确保始终清晰。窗口本体仍 transparent，亚克力在卡片缝隙与边缘透出。 */
+.settings-modal.bg-transparent .settings-header,
+.settings-modal.bg-transparent .settings-footer,
+.settings-modal.bg-transparent .settings-nav,
+.settings-modal.bg-transparent .settings-section {
+  background: color-mix(in srgb, var(--bg-bar) 85%, transparent);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+.settings-modal.bg-transparent .settings-input,
+.settings-modal.bg-transparent .settings-select,
+.settings-modal.bg-transparent .shortcut-combo,
+.settings-modal.bg-transparent .shortcut-rec,
+.settings-modal.bg-transparent .shortcut-confirm,
+.settings-modal.bg-transparent .cs-trigger {
+  background: color-mix(in srgb, var(--bg-bar) 80%, transparent);
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+.settings-modal.bg-transparent .nav-item {
+  color: var(--text);
+}
+.settings-modal.bg-transparent .nav-item.active {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  text-shadow: none;
+}
+.settings-modal.bg-transparent .settings-h3,
+.settings-modal.bg-transparent .settings-label,
+.settings-modal.bg-transparent .settings-tip,
+.settings-modal.bg-transparent .settings-val {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
 
 /* ===== 设置弹窗：左侧菜单 + 右侧内容 两栏布局 ===== */
 .settings-layout-body {
