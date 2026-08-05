@@ -496,7 +496,6 @@ body,
   border-color: rgba(255, 255, 255, 0.16);
   /* 不叠加 backdrop-filter：模糊由 DWM 提供，控件纯半透明叠上去即可，
      避免每个控件各自做一遍 GPU 模糊合成（拖动时每帧重算 → 卡顿主因） */
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 /* 字体颜色/字号控件：保持可见底色与边框，不被强制透明（便于选色与选字号） */
 .note-window.bg-transparent .tool-color,
@@ -511,12 +510,11 @@ body,
 .note-window.bg-transparent .tool-format {
   background: color-mix(in srgb, var(--bg-bar, var(--bg)) 28%, transparent);
 }
-/* 透明主题下标题输入框：与其余按钮同款果冻底（半透明主题色），仅保留文字阴影保证可读 */
+/* 透明主题下标题输入框：与其余按钮同款果冻底（半透明主题色），文字靠主题色保证可读 */
 .note-window.bg-transparent .title-input,
 .note-window.bg-transparent .title-input:focus {
   background: color-mix(in srgb, var(--bg-bar, var(--bg)) 28%, transparent);
   border-color: transparent;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 .note-window.bg-transparent .editor-area,
 .note-window.bg-transparent .editor {
@@ -528,12 +526,11 @@ body,
   position: relative;
   z-index: 1;
 }
-/* 文字增强对比度（浅色与深色主题均适用） */
+/* 文字颜色统一走主题色（浅色与深色主题均适用），不靠投影，避免小字发虚 */
 .note-window.bg-transparent .editor,
 .note-window.bg-transparent .title-input,
 .note-window.bg-transparent .icon-btn {
   color: var(--text);
-  text-shadow: 0 0 3px rgba(0, 0, 0, 0.18), 0 0 8px rgba(255, 255, 255, 0.12);
 }
 .note-window.bg-transparent .icon-btn:hover {
   background: color-mix(in srgb, var(--bg-bar, var(--bg)) 46%, transparent);
@@ -1939,14 +1936,8 @@ body,
 }
 .settings-modal.bg-transparent .nav-item.active {
   background: color-mix(in srgb, var(--accent) 30%, transparent);
-  text-shadow: none;
 }
-.settings-modal.bg-transparent .settings-h3,
-.settings-modal.bg-transparent .settings-label,
-.settings-modal.bg-transparent .settings-tip,
-.settings-modal.bg-transparent .settings-val {
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-}
+/* 透明模式下不再加文字投影：85% 接近不透明的底已保证可读，投影只会让小字发虚 */
 
 /* ===== 设置弹窗：左侧菜单 + 右侧内容 两栏布局 ===== */
 .settings-layout-body {
