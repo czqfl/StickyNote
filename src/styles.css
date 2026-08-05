@@ -319,6 +319,38 @@ body,
   background: color-mix(in srgb, var(--bg) calc(var(--note-panel-alpha, 0.7) * 100%), transparent);
 }
 
+/* ===== 独立设置窗口：镜像便签背景 + 毛玻璃（与便签同一套 ::before 渲染管线） ===== */
+.settings-modal.has-bg { position: relative; }
+.settings-modal.has-bg::before {
+  content: "";
+  position: absolute;
+  /* 向外扩展以容纳模糊半径，避免边缘透出透明（配合父级 overflow:hidden 裁掉溢出） */
+  inset: -48px;
+  background-image: var(--note-bg-img);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--note-bg-opacity, 1);
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+}
+.settings-modal.has-bg.glass::before {
+  filter: blur(var(--glass-blur, 16px));
+  /* 提升到独立合成层，模糊渐变时避免整页重绘 */
+  transform: translateZ(0);
+}
+.settings-modal.has-bg.glass.animating::before {
+  will-change: filter;
+}
+/* 内容层级抬到背景图之上 */
+.settings-modal.has-bg > * { position: relative; z-index: 1; }
+/* 背景图上提升分区可读性：面板用近不透明底色垫底（与便签编辑器一致） */
+.settings-modal.has-bg .settings-section,
+.settings-modal.has-bg .settings-nav {
+  background: color-mix(in srgb, var(--bg-bar) 92%, transparent);
+}
+
 /* ===== 设置弹窗：背景图片选择 ===== */
 .bg-img-row {
   align-items: center;

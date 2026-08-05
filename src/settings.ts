@@ -1,5 +1,6 @@
 import { loadSettings, saveSettings, saveMdCustom, openFile, startDragging, setAcrylic } from "./api";
 import { applyGlassBlur, parseColorToRgbInt } from "./glass";
+import { applyPanelBackground } from "./panel-bg";
 import { listen } from "@tauri-apps/api/event";
 import type { Settings } from "./types";
 
@@ -689,10 +690,12 @@ export async function openSettingsModal(): Promise<void> {
   }
   /** 实时套用“背景不透明度”：低值（<2%）关闭 DWM 效果（完全透明），≥2% 开启并写
    *  主题色面板（--trans-opacity，0.6 × 滑块值，线性 0~60%）；SWCA tint 固定最小
-   *  alpha（Rust 侧 alpha=1），滑块拖动即刻生效（不依赖 IPC）。 */
+   *  alpha（Rust 侧 alpha=1），滑块拖动即刻生效（不依赖 IPC）。独立窗口直接作用于设置面板。 */
   function applyAcrylicLive() {
     const o = normalizeOpacity(draft.transparent_opacity);
-    const panel = previewPanel();
+    const panel = standalone
+      ? (overlay.querySelector(".settings-modal") as HTMLElement | null)
+      : previewPanel();
     if (o < 2) {
       document.documentElement.style.setProperty("--trans-opacity", "0");
       if (panel) {
@@ -714,8 +717,51 @@ export async function openSettingsModal(): Promise<void> {
       ) ?? 0;
     setAcrylic(true, 1, tint).catch(() => {});
   }
+  // 独立设置窗口：把当前设置（背景图 + 毛玻璃 / 原生亚克力）套用到设置面板自身，
+  // 使其与便签窗口观感完全一致（背景图、模糊强度、透明主题实时磨砂同款）。
+  // 仅在 standalone 模式生效；内嵌浮层（盖在便签上）由下方便签窗口负责背景，无需自绘。
+  async function applyStandaloneBg() {
+    if (!standalone) return;
+    const modal = overlay.querySelector(".settings-modal") as HTMLElement | null;
+    if (!modal) return;
+    const s = draft;
+    const transparent = s.theme === "transparent";
+    if (transparent) {
+      modal.classList.remove("has-bg", "on-dark-bg", "glass");
+      modal.classList.add("bg-transparent");
+      modal.style.removeProperty("--note-bg-img");
+      modal.style.removeProperty("--note-bg-opacity");
+      modal.style.removeProperty("--glass-blur");
+      const o = normalizeOpacity(s.transparent_opacity);
+      if (o < 2) {
+        modal.classList.add("transparent-clear");
+        modal.style.setProperty("--trans-opacity", "0");
+        document.documentElement.style.setProperty("--trans-opacity", "0");
+        setAcrylic(false, 0, 0).catch(() => {});
+      } else {
+        modal.classList.remove("transparent-clear");
+        const capped = Math.round(o * 0.6);
+        modal.style.setProperty("--trans-opacity", String(capped));
+        document.documentElement.style.setProperty("--trans-opacity", String(capped));
+        const tint = parseColorToRgbInt(getComputedStyle(modal).getPropertyValue("--bg")) ?? 0;
+        setAcrylic(true, 1, tint).catch((e) => console.error("应用实时模糊失败:", e));
+      }
+    } else {
+      modal.classList.remove("bg-transparent", "transparent-clear");
+      modal.style.removeProperty("--trans-opacity");
+      document.documentElement.style.removeProperty("--trans-opacity");
+      setAcrylic(false, 0, 0).catch(() => {});
+      await applyPanelBackground(modal, s);
+      const hasBg = modal.classList.contains("has-bg");
+      const pct = normalizeGlassPct(s.glass_blur);
+      const enabled = s.glass_enabled !== false;
+      applyGlassBlur({ target: modal, strength: hasBg ? pct : 0, enabled: hasBg && enabled });
+    }
+  }
+
   function applyTransparentPreview(transparent: boolean) {
     syncTransparentControls(transparent);
+    if (standalone) { void applyStandaloneBg(); return; }
     const panel = previewPanel();
     if (transparent) {
       applyAcrylicLive();
@@ -801,6 +847,7 @@ export async function openSettingsModal(): Promise<void> {
       const { saveBgImage } = await import("./api");
       draft.bg_image = await saveBgImage(compressed, "global");
       await renderBgPreview();
+      if (standalone) void applyStandaloneBg();
       msg.textContent = "已选择背景图，点“保存”生效。";
       msg.classList.add("ok");
     } catch (e) {
@@ -812,6 +859,7 @@ export async function openSettingsModal(): Promise<void> {
     const old = draft.bg_image;
     draft.bg_image = "";
     renderBgPreview();
+    if (standalone) void applyStandaloneBg();
     if (old && !old.startsWith("data:")) {
       try {
         const { deleteBgImage } = await import("./api");
@@ -839,8 +887,10 @@ export async function openSettingsModal(): Promise<void> {
   function applyGlassLive(pct: number) {
     const p = Math.max(0, Math.min(100, Math.round(pct)));
     glassBlurVal.textContent = p + "%";
-    const panel = previewPanel();
-    if (!panel) return;
+    const panel = standalone
+      ? (overlay.querySelector(".settings-modal") as HTMLElement | null)
+      : previewPanel();
+    if (!panel || !panel.classList.contains("has-bg")) return;
     applyGlassBlur({ target: panel, strength: p, enabled: glassChk.checked });
   }
   glassChk.addEventListener("change", () => {
