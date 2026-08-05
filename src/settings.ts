@@ -351,6 +351,7 @@ function defaultSettings(): Settings {
     glass_blur: 55,
     transparent_opacity: 65,
     particle_intensity: 50,
+    particle_mode: "flame",
   } as Settings;
 }
 
@@ -481,6 +482,13 @@ export async function openSettingsModal(): Promise<void> {
                 <label class="settings-label">粒子强度</label>
                 <input type="range" id="particle-intensity" min="0" max="100" step="1" value="50">
                 <span class="settings-val" id="particle-intensity-val">50</span>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">粒子风格</label>
+                <select class="settings-select" id="set-particle-mode">
+                  <option value="flame">火焰消散（波浪燃烧线）</option>
+                  <option value="erode">侵蚀消散（烧纸/酸蚀·羽化软边）</option>
+                </select>
               </div>
             </div>
           </section>
@@ -799,6 +807,7 @@ export async function openSettingsModal(): Promise<void> {
   enhanceSelect(targetLatinSel);
   enhanceSelect(mdThemeSel);
   enhanceSelect(themeSel);
+  enhanceSelect(overlay.querySelector("#set-particle-mode") as HTMLSelectElement);
 
   // 透明主题实时预览：切到/切离透明时即时启停 DWM 实时模糊（零延迟）。
   // “背景不透明度”0% = 关闭 DWM 效果完全透明；>0% = 系统亚克力实时模糊 +
@@ -934,6 +943,9 @@ export async function openSettingsModal(): Promise<void> {
   particleIntensitySlider.addEventListener("input", () => {
     particleIntensityVal.textContent = particleIntensitySlider.value;
   });
+  // ---- 粒子风格（火焰消散 / 侵蚀消散）----
+  const particleModeSel = overlay.querySelector("#set-particle-mode") as HTMLSelectElement;
+  particleModeSel.value = draft.particle_mode || "flame";
 
   // ---- 全局默认背景图 ----
   const bgUploadBtn = overlay.querySelector("#bg-upload") as HTMLButtonElement;
@@ -1232,6 +1244,7 @@ export async function openSettingsModal(): Promise<void> {
     draft.theme = themeSel.value;
     draft.edge_snap = edgeSnapChk.checked;
     draft.particle_intensity = Number(particleIntensitySlider.value);
+    draft.particle_mode = (overlay.querySelector("#set-particle-mode") as HTMLSelectElement).value;
     draft.llm_base_url = llmBase.value.trim();
     draft.llm_api_key = llmKey.value.trim();
     draft.llm_model = llmModel.value.trim();

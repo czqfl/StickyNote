@@ -400,6 +400,9 @@ struct Settings {
     /// 粒子效果强度 0~100（关闭/呼出动画的粒子数量）：默认 50，上限 100。
     #[serde(default = "default_particle_intensity")]
     particle_intensity: f64,
+    /// 粒子效果风格：flame=火焰消散（默认）/ erode=侵蚀消散（烧纸/酸蚀，羽化软边）。
+    #[serde(default = "default_particle_mode")]
+    particle_mode: String,
 }
 
 fn default_bg_glass_opacity() -> f64 {
@@ -420,6 +423,10 @@ fn default_transparent_opacity() -> f64 {
 
 fn default_particle_intensity() -> f64 {
     50.0
+}
+
+fn default_particle_mode() -> String {
+    "flame".into()
 }
 
 impl Default for Settings {
@@ -460,6 +467,7 @@ impl Default for Settings {
             glass_blur: 16.0,
             transparent_opacity: 65.0,
             particle_intensity: 50.0,
+            particle_mode: "flame".into(),
         }
     }
 }

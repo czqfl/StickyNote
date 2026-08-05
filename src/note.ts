@@ -22,6 +22,7 @@ import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
 import { requestParticleDissolveClose } from "./dissolve";
 import { playSummonMaterialize, cancelSummon } from "./summon";
+import { requestErodeDissolveClose, playErodeMaterialize, cancelErode } from "./erode";
 import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
 import { applyPanelBackground } from "./panel-bg";
 import {
@@ -834,7 +835,8 @@ export function mountNoteApp(noteId: string, preset = "") {
       getSettings()
         .then((s) => {
           const intensity = s.particle_intensity ?? 50;
-          playSummonMaterialize(noteWindow, intensity);
+          if (s.particle_mode === "erode") playErodeMaterialize(noteWindow, intensity);
+          else playSummonMaterialize(noteWindow, intensity);
         })
         .catch(() => playSummonMaterialize(noteWindow));
     }
@@ -2006,8 +2008,9 @@ export function mountNoteApp(noteId: string, preset = "") {
   let acrylicOffPending = false;
   function requestAnimatedClose() {
     if (closing) return;
-    // 呼出动画若在播放，先立即收尾复原页面，避免两个动画同时改 clip-path
+    // 呼出动画若在播放，先立即收尾复原页面，避免两个动画同时改 clip-path / mask
     cancelSummon();
+    cancelErode();
     closing = true;
     finished = false;
     const finish = () => {
@@ -2041,7 +2044,8 @@ export function mountNoteApp(noteId: string, preset = "") {
     getSettings()
       .then((s) => {
         const intensity = s.particle_intensity ?? 50;
-        requestParticleDissolveClose(finish, intensity);
+        if (s.particle_mode === "erode") requestErodeDissolveClose(finish, intensity);
+        else requestParticleDissolveClose(finish, intensity);
       })
       .catch(() => requestParticleDissolveClose(finish));
   }
