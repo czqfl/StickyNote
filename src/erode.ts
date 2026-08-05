@@ -433,6 +433,7 @@ function runErode(
   let prevNow = 0;
   let lastPaint = 0;
   let endedLocal = false;
+  let watchdog = 0; // 强制收尾看门狗句柄
 
   const stopLoop = () => {
     endedLocal = true;
@@ -440,6 +441,10 @@ function runErode(
     if (backupId) {
       window.clearInterval(backupId);
       backupId = 0;
+    }
+    if (watchdog) {
+      window.clearTimeout(watchdog);
+      watchdog = 0;
     }
   };
 
@@ -566,43 +571,48 @@ function runErode(
     if (!endedLocal) rafId = requestAnimationFrame(step);
   };
 
-  // materialize：先备好首帧蒙版（全透明）再开启动画，避免露出便签旧内容造成闪现。
-  // dissolve：首帧蒙版本就接近全可见，直接开始即可。
+  // 两种方向都同步启动循环（不依赖 Image.onload），避免首帧蒙版未解码时循环永不开始、
+  // materialize 卡死（便签呼出后无内容、materializing 卡 true、后续呼出被忽略）。
+  // dissolve 首帧为全可见、materialize 首帧为全透明，各自与语义一致。
+  renderMask(0);
+  setMask(maskCanvas.toDataURL());
   if (isDissolve) {
-    renderMask(0);
-    setMask(maskCanvas.toDataURL());
-    rafId = requestAnimationFrame(step);
-    backupId = window.setInterval(() => {
-      if (endedLocal) return;
-      const now = performance.now();
-      if (now - lastPaint > 60) {
-        lastPaint = now;
-        frame(now);
-      }
-    }, 40);
+    try {
+      root.style.clipPath = "";
+    } catch {
+      /* ignore */
+    }
   } else {
-    renderMask(0); // age=0：materialize 全透明（空画面）
-    const url = maskCanvas.toDataURL();
-    const im = new Image();
-    im.onload = () => {
-      if (endedLocal) return;
-      setMask(url); // 空蒙版就位后再清掉 flame 残留的 clip-path，从空开始成形
-      try {
-        root.style.clipPath = "";
-      } catch {
-        /* ignore */
-      }
-      lastMaskPush = 0;
-      rafId = requestAnimationFrame(step);
-      backupId = window.setInterval(() => {
-        if (endedLocal) return;
-        const now = performance.now();
-        if (now - lastPaint > 60) {
-          lastPaint = now;
-          frame(now);
-        }
-      }, 40);
-    };
-    im.src = url;
+    // materialize：清掉 flame 残留的 clip-path 空裁切，由 mask 接管；起始 opacity=0
+    // 配合 applyOpacity 淡入，杜绝闪现旧内容。
+    try {
+      root.style.clipPath = "";
+    } catch {
+      /* ignore */
+    }
+    root.style.opacity = "0";
   }
+  rafId = requestAnimationFrame(step);
+  backupId = window.setInterval(() => {
+    if (endedLocal) return;
+    const now = performance.now();
+    if (now - lastPaint > 60) {
+      lastPaint = now;
+      frame(now);
+    }
+  }, 40);
+
+  // 看门狗：无论循环是否推进，到时强制收尾——materialize 复原内容 / dissolve 隐藏窗口，
+  // 彻底杜绝「呼出后便签无内容」卡死（与 summon.ts 的看门狗同思路）。
+  watchdog = window.setTimeout(() => {
+    if (endedLocal) return;
+    stopLoop();
+    if (isDissolve) {
+      cleanupAfterHide();
+      onDone();
+    } else {
+      finishMaterialize();
+      onDone();
+    }
+  }, duration + 600);
 }

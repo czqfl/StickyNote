@@ -832,13 +832,19 @@ export function mountNoteApp(noteId: string, preset = "") {
         return;
       }
       // 非透明主题：按粒子强度/风格设置启动呼出动画
+      let usedMode = "flame";
       getSettings()
         .then((s) => {
           const intensity = s.particle_intensity ?? 50;
-          if (s.particle_mode === "erode") playErodeMaterialize(noteWindow, intensity);
+          usedMode = s.particle_mode === "erode" ? "erode" : "flame";
+          if (usedMode === "erode") playErodeMaterialize(noteWindow, intensity);
           else playSummonMaterialize(noteWindow, intensity);
         })
-        .catch(() => playSummonMaterialize(noteWindow));
+        .catch(() => {
+          // 读取失败时回退到对应风格（保持 erode 仍是 erode，避免无声切回火焰）
+          if (usedMode === "erode") playErodeMaterialize(noteWindow);
+          else playSummonMaterialize(noteWindow);
+        });
     }
   });
 
