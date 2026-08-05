@@ -4,6 +4,7 @@ import { applyPanelBackground } from "./panel-bg";
 import { applyGlassBlur, parseColorToRgbInt } from "./glass";
 import type { Settings } from "./types";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export function mountHistoryApp() {
   const app = document.getElementById("app")!;
@@ -34,8 +35,14 @@ export function mountHistoryApp() {
       if (s.theme === "dark" || s.theme === "transparent") root.classList.add("theme-dark");
       // 套用与便签一致的背景效果（背景图+毛玻璃 / 透明主题原生亚克力）
       void applyHistoryBg(s);
+      // 骨架已同步渲染、主题类已套上，此刻再显示窗口，消除打开瞬间白/透明闪
+      getCurrentWindow().show().then(() => getCurrentWindow().setFocus()).catch(() => {});
     })
-    .catch((e) => console.error("读取主题失败:", e));
+    .catch((e) => {
+      console.error("读取主题失败:", e);
+      // 即便主题读取失败，骨架也已渲染，仍需把窗口显示出来
+      getCurrentWindow().show().catch(() => {});
+    });
 
   // 设置变更时实时同步背景（与便签窗口一致）
   listen("stickynote-settings-changed", () => {

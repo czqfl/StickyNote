@@ -70,4 +70,13 @@ export async function mountImageViewer(): Promise<void> {
   await load();
   // 同一窗口被复用时（再次双击别的图片），后端会 emit 该事件触发重新拉取
   listen("viewer-reload", () => load());
+  // 数据为空时 load() 内部已关闭窗口，无需（也不应）再 show
+  if (!urls.length) return;
+  // 首帧（结构已注入、CSS 深色背景已应用）就绪后再显示窗口，消除打开瞬间白闪
+  try {
+    await getCurrentWindow().show();
+    await getCurrentWindow().setFocus();
+  } catch (e) {
+    console.error("显示图片预览窗口失败:", e);
+  }
 }

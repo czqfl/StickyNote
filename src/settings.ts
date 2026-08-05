@@ -1251,6 +1251,7 @@ export async function openSettingsModal(): Promise<void> {
       msg.classList.remove("ok");
     }
   });
+    if (standalone) void applyStandaloneBg();
   } // ===== paint 函数结束 =====
 
   try {
@@ -1264,6 +1265,18 @@ export async function openSettingsModal(): Promise<void> {
       p.className = "settings-tip";
       p.textContent = "设置面板加载失败：" + String((e as Error)?.message || e);
       body.appendChild(p);
+    }
+  }
+
+  // 面板已同步渲染完成（含主题类与背景 class），此刻再让窗口可见，
+  // 避免后端 build 后立刻 show 导致的首帧白/透明闪烁。
+  if (standalone) {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().show();
+      await getCurrentWindow().setFocus();
+    } catch (e) {
+      console.error("显示设置窗口失败:", e);
     }
   }
 

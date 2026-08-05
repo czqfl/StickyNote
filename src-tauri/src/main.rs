@@ -1639,7 +1639,7 @@ async fn open_history_window(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    let win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
+    let _win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
         .title("历史便签")
         .decorations(false)
         .transparent(true)
@@ -1653,8 +1653,8 @@ async fn open_history_window(app: AppHandle) -> Result<(), String> {
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
-    let _ = win.show();
-    let _ = win.set_focus();
+    // 可见性交由前端 mountHistoryApp 在骨架渲染、主题类套上后再 show，
+    // 避免后端 build 后立刻 show 导致的首帧白/透明闪烁。
     Ok(())
 }
 
@@ -1970,7 +1970,7 @@ async fn open_image_viewer(
         return Ok(());
     }
     // 异步命令：窗口创建在 async 运行时线程上进行，避免在主线程同步 build WebView2 造成的死锁
-    let win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
+    let _win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
         .title("图片预览")
         .decorations(true)
         .transparent(false)
@@ -1983,8 +1983,9 @@ async fn open_image_viewer(
         .shadow(true)
         .build()
         .map_err(|e| e.to_string())?;
-    let _ = win.show();
-    let _ = win.set_focus();
+    // 注意：此处故意不调用 win.show()——窗口可见性交由前端在 WebView 首帧
+    // （结构已注入、CSS 已应用、图片数据已加载）就绪后再 show，彻底消除
+    // 打开瞬间的白屏/透明闪。窗口已存在分支（上方）仍保留 show 以复用可见窗口。
     Ok(())
 }
 
@@ -2004,7 +2005,7 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    let win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
+    let _win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
         .title("便签设置")
         .decorations(false)
         .transparent(true)
@@ -2018,8 +2019,8 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
-    let _ = win.show();
-    let _ = win.set_focus();
+    // 可见性交由前端 openSettingsModal 在 paint(initial) 同步画完面板后 show，
+    // 避免后端 build 后立刻 show 导致的首帧白/透明闪烁。
     Ok(())
 }
 
