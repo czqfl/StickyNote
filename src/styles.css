@@ -1376,6 +1376,48 @@ body,
   background: var(--bg-hover);
 }
 
+/* ===== 历史窗口：镜像便签背景 + 毛玻璃（与便签同一套 ::before 渲染管线） ===== */
+.history-window.has-bg { position: relative; }
+.history-window.has-bg::before {
+  content: "";
+  position: absolute;
+  inset: -48px;
+  background-image: var(--note-bg-img);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--note-bg-opacity, 1);
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+}
+.history-window.has-bg.glass::before {
+  filter: blur(var(--glass-blur, 16px));
+  transform: translateZ(0);
+}
+.history-window.has-bg.glass.animating::before {
+  will-change: filter;
+}
+.history-window.has-bg > * { position: relative; z-index: 1; }
+/* 透明主题：窗口本体透明，让 DWM 原生亚克力磨砂桌面透出来（与便签一致） */
+.history-window.bg-transparent { background: transparent; }
+/* 玻璃卡片：列表与卡片半透，透出背后的背景图/模糊 */
+.history-window.has-bg .history-list,
+.history-window.bg-transparent .history-list { background: transparent; }
+.history-window.has-bg .history-card,
+.history-window.bg-transparent .history-card {
+  background: color-mix(in srgb, var(--bg-bar) 38%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+.history-window.has-bg .history-card:hover,
+.history-window.bg-transparent .history-card:hover {
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+}
+.history-window.has-bg .titlebar,
+.history-window.bg-transparent .titlebar {
+  background: color-mix(in srgb, var(--bg-bar) 38%, transparent);
+}
+
 .card-info {
   flex: 1;
   min-width: 0;

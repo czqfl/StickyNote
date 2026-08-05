@@ -1,5 +1,9 @@
-import { listNotes, deleteNote, openNoteWindow, closeWindow, startDragging, getOpenNotes } from "./api";
+import { listNotes, deleteNote, openNoteWindow, closeWindow, startDragging, getOpenNotes, setAcrylic } from "./api";
 import { getSettings } from "./settings";
+import { applyPanelBackground } from "./panel-bg";
+import { applyGlassBlur, parseColorToRgbInt } from "./glass";
+import type { Settings } from "./types";
+import { listen } from "@tauri-apps/api/event";
 
 export function mountHistoryApp() {
   const app = document.getElementById("app")!;
@@ -23,14 +27,50 @@ export function mountHistoryApp() {
   const btnClose = document.getElementById("btn-close")!;
 
   // 套用全局外观主题（浅色 / 深色），使历史窗口与便签配色一致。
-  // 注意：不再套用背景图/高斯模糊——实时模糊对这类辅助窗口开销大、且容易卡顿。
   getSettings()
     .then((s) => {
       const root = document.documentElement;
       root.classList.remove("theme-dark");
       if (s.theme === "dark" || s.theme === "transparent") root.classList.add("theme-dark");
+      // 套用与便签一致的背景效果（背景图+毛玻璃 / 透明主题原生亚克力）
+      void applyHistoryBg(s);
     })
     .catch((e) => console.error("读取主题失败:", e));
+
+  // 设置变更时实时同步背景（与便签窗口一致）
+  listen("stickynote-settings-changed", () => {
+    getSettings().then((s) => void applyHistoryBg(s)).catch(() => {});
+  }).catch((e) => console.error("监听设置变更失败:", e));
+
+  // 套用与便签一致的背景效果（背景图+毛玻璃 或 透明主题原生亚克力）
+  async function applyHistoryBg(s: Settings): Promise<void> {
+    const root = document.querySelector(".history-window") as HTMLElement | null;
+    if (!root) return;
+    const transparent = s.theme === "transparent";
+    if (transparent) {
+      root.classList.remove("has-bg", "on-dark-bg", "glass");
+      root.classList.add("bg-transparent");
+      root.style.removeProperty("--note-bg-img");
+      root.style.removeProperty("--note-bg-opacity");
+      root.style.removeProperty("--glass-blur");
+      const o = Math.min(100, Math.max(0, Number(s.transparent_opacity ?? 65)));
+      const capped = Math.round(o * 0.6);
+      document.documentElement.style.setProperty("--trans-opacity", String(capped));
+      root.style.setProperty("--trans-opacity", String(capped));
+      const tint = parseColorToRgbInt(getComputedStyle(root).getPropertyValue("--bg")) ?? 0;
+      setAcrylic(true, 1, tint).catch((e) => console.error("应用实时模糊失败:", e));
+    } else {
+      root.classList.remove("bg-transparent");
+      document.documentElement.style.removeProperty("--trans-opacity");
+      root.style.removeProperty("--trans-opacity");
+      setAcrylic(false, 0, 0).catch(() => {});
+      await applyPanelBackground(root, s);
+      const hasBg = root.classList.contains("has-bg");
+      const pct = s.glass_blur ?? 55;
+      const enabled = s.glass_enabled !== false;
+      applyGlassBlur({ target: root, strength: hasBg ? pct : 0, enabled: hasBg && enabled });
+    }
+  }
 
   // 拖拽
   titlebar.addEventListener("mousedown", (e) => {
