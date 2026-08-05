@@ -1166,6 +1166,7 @@ export async function openSettingsModal(): Promise<void> {
 
   // ---- 关闭 ----
   async function close() {
+    document.removeEventListener("keydown", onEscKey);
     recCleanup.forEach((fn) => fn());
     overlay.remove();
     // 设置面板运行在独立“设置”窗口里：关闭面板即关闭窗口
@@ -1177,6 +1178,13 @@ export async function openSettingsModal(): Promise<void> {
       console.error("关闭设置窗口失败:", e);
     }
   }
+  // Esc 关闭设置面板：若自定义下拉正打开则先关下拉，否则关闭面板
+  const onEscKey = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    if (openCs) { openCs.close(); return; }
+    close();
+  };
+  document.addEventListener("keydown", onEscKey);
   (overlay.querySelector("#set-close") as HTMLButtonElement).addEventListener("click", close);
   // 独立“设置”窗口里整窗就是面板本体，不存在“点遮罩关闭”的概念。
   // 旧写法按 e.target === overlay 判断，会把窗口四周的空白边缘（16px padding 区）

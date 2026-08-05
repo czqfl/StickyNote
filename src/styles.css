@@ -1963,7 +1963,7 @@ body,
   border: none;
   background: transparent;
   color: var(--text-sub);
-  font-size: 12.5px;
+  font-size: 13px;
   font-family: inherit;
   padding: 8px 10px;
   border-radius: 9px;
@@ -1981,7 +1981,7 @@ body,
 }
 .settings-content {
   flex: 1;
-  padding: 14px;
+  padding: 18px;
   overflow-y: auto;
   min-width: 0;
 }
@@ -2009,13 +2009,13 @@ body,
 }
 
 .settings-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text);
 }
 
 .settings-body {
-  padding: 12px;
+  padding: 16px;
   overflow-y: auto;
 }
 
@@ -2023,8 +2023,8 @@ body,
   background: color-mix(in srgb, var(--bg-bar) 42%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 14px;
-  padding: 12px;
-  margin-bottom: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
 }
 
 .settings-section:last-child {
@@ -2032,19 +2032,19 @@ body,
 }
 
 .settings-h3 {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
-  margin-bottom: 8px;
-  padding-bottom: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .settings-tip {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-hint);
-  margin-bottom: 8px;
-  line-height: 1.4;
+  margin-bottom: 10px;
+  line-height: 1.5;
 }
 
 .shortcut-list {
@@ -2061,12 +2061,12 @@ body,
 
 .shortcut-label {
   flex: 1;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
 }
 
 .shortcut-combo {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-sub);
   background: var(--bg-bar);
   border: 1px solid var(--border);
@@ -2084,7 +2084,7 @@ body,
 
 .shortcut-rec,
 .shortcut-confirm {
-  font-size: 12px;
+  font-size: 13px;
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--bg);
@@ -2110,11 +2110,16 @@ body,
   border-color: var(--accent);
 }
 
+.settings-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
 .settings-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   flex-wrap: wrap;
 }
 
@@ -2143,10 +2148,10 @@ body,
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-sub);
   cursor: pointer;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .settings-check input {
@@ -2159,12 +2164,12 @@ body,
 .settings-input,
 .settings-select {
   flex: 1;
-  height: 28px;
+  height: 30px;
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--bg);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
   padding: 0 8px;
   outline: none;
@@ -2206,7 +2211,7 @@ body,
   border-radius: 9px;
   background: color-mix(in srgb, var(--bg-bar) 55%, transparent);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
   padding: 0 10px;
   cursor: pointer;
@@ -2229,7 +2234,7 @@ body,
 .cs-caret {
   flex: none;
   color: var(--text-sub);
-  font-size: 10px;
+  font-size: 11px;
   transition: transform .15s ease;
 }
 .cs.open .cs-caret {
@@ -2251,7 +2256,7 @@ body,
   display: block;
 }
 .cs-group {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-hint);
   padding: 7px 9px 3px;
@@ -2260,7 +2265,7 @@ body,
   padding: 7px 10px;
   border-radius: 7px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -2286,7 +2291,7 @@ body,
 }
 
 .settings-msg {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-hint);
   margin-right: auto;
 }
@@ -2296,7 +2301,7 @@ body,
 }
 
 .btn-primary {
-  font-size: 12px;
+  font-size: 13px;
   border: 1px solid var(--accent);
   border-radius: 9px;
   background: var(--accent);
