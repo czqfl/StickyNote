@@ -64,6 +64,7 @@ export function mountNoteApp(noteId: string, preset = "") {
         <div class="titlebar-left">
           <button class="icon-btn gear" id="btn-settings" title="设置">&#9881;</button>
           <input class="title-input" id="note-title" placeholder="便签" maxlength="40" spellcheck="false" title="点击编辑标题" />
+          <span class="save-status" id="save-status"></span>
         </div>
         <div class="titlebar-grip" id="drag-grip" title="拖动便签"><span class="grip-dots"></span></div>
         <div class="titlebar-right">
@@ -161,6 +162,7 @@ export function mountNoteApp(noteId: string, preset = "") {
   const btnTray = document.getElementById("btn-tray")!;
   const btnSettings = document.getElementById("btn-settings")!;
   const titleInput = document.getElementById("note-title") as HTMLInputElement;
+  const saveStatus = document.getElementById("save-status") as HTMLElement | null;
   const btnTranslate = document.getElementById("btn-translate")!;
   const btnCopy = document.getElementById("btn-copy") as HTMLButtonElement;
   const toolFg = document.getElementById("tool-fg") as HTMLInputElement;
@@ -579,8 +581,28 @@ export function mountNoteApp(noteId: string, preset = "") {
       current.content = editor.innerHTML;
       current.title = titleInput.value;
       current.updated = Date.now();
-      saveNote(noteId, current).catch((e) => console.error("保存失败:", e));
+      setSaveStatus("保存中…");
+      saveNote(noteId, current)
+        .then(() => setSaveStatus("已保存"))
+        .catch((e) => {
+          console.error("保存失败:", e);
+          setSaveStatus("保存失败", true);
+        });
     }, SAVE_DELAY);
+  }
+
+  // 自动保存状态提示：输入停顿后短暂显示「保存中…」→「已保存」（或「保存失败」）。
+  let savedStatusTimer: number | undefined;
+  function setSaveStatus(text: string, isError = false) {
+    if (!saveStatus) return;
+    saveStatus.textContent = text;
+    saveStatus.classList.toggle("error", isError);
+    saveStatus.classList.add("show");
+    if (savedStatusTimer) window.clearTimeout(savedStatusTimer);
+    savedStatusTimer = window.setTimeout(
+      () => saveStatus!.classList.remove("show"),
+      isError ? 2600 : 1400,
+    );
   }
 
   // ---- 设置联动：提示文案 ----
@@ -2045,7 +2067,10 @@ export function mountNoteApp(noteId: string, preset = "") {
     current.content = editor.innerHTML;
     current.title = titleInput.value;
     current.updated = Date.now();
-    saveNote(noteId, current).catch(() => {});
+    setSaveStatus("保存中…");
+    saveNote(noteId, current)
+      .then(() => setSaveStatus("已保存"))
+      .catch(() => setSaveStatus("保存失败", true));
   });
 
   // 该便签在历史列表被删除时，后端会向本窗口发送 note-deleted 事件：

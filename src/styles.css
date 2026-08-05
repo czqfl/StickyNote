@@ -666,6 +666,26 @@ body,
   font-size: 14px;
 }
 
+/* 自动保存状态提示（标题栏内，输入停顿后短暂显示「保存中…」→「已保存」） */
+.save-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-hint);
+  margin-left: 4px;
+  opacity: 0;
+  transform: translateY(1px);
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.save-status.show {
+  opacity: 1;
+}
+.save-status.error {
+  color: var(--danger);
+}
+
 /* 可编辑的便签标题（自定义标题）。宽度随空间自动伸缩、尽量展示完整标题；
    收缩下限 40px，窗口很窄时让位给按钮。 */
 .title-input {
