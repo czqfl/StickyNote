@@ -2013,17 +2013,17 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    let _win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
+    let _win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("settings.html".into()))
         .title("便签设置")
         .decorations(false)
-        .transparent(true)
+        .transparent(false) // 不透明实窗：彻底杜绝透明窗口首帧白板/透明闪烁
         .resizable(true)
         .always_on_top(true)
-        .inner_size(880.0, 640.0)
-        .min_inner_size(640.0, 480.0)
+        .inner_size(800.0, 600.0)
+        .min_inner_size(680.0, 500.0)
         .center()
         .visible(false)
-        .shadow(false)
+        .shadow(true)
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
