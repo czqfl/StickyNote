@@ -164,31 +164,38 @@ function playDissolve(root: HTMLElement, onDone: () => void, particleDensity: nu
     return c;
   }
   const fireSprites: HTMLCanvasElement[] = FIRE_RGB.map(makeFireSprite);
-  // 燃烧/成形前沿的纵向暖色渐变（上黄下橙），只创建一次避免逐帧分配
-  const fireEdgeGrad = ctx.createLinearGradient(0, 0, 0, h);
-  fireEdgeGrad.addColorStop(0, "rgba(255,215,130,0.95)");
-  fireEdgeGrad.addColorStop(1, "rgba(255,105,30,0.8)");
 
   // ---- 燃烧线：波浪形边缘，从顶部向底部推进 ----
   const wipeDuration = 320; // 烧完全页的用时 ms（快）
   const duration = 1400; // 总时长 ms（燃烧 + 粒子飘散收尾），延长让粒子更舒缓地随风飘散
 
-  // 波浪燃烧线的纵向位置：基准随进度下移 + 两档频率的正弦起伏（左右时机不同）+ 抖动
-  const EDGE_N = 26; // 采样点数（左右方向的波浪细腻度）
-  const waveAmp = 10; // 主波幅度 px
+  // 波浪燃烧线的纵向位置：基准随进度下移 + 多档频率正弦 + 逐点伪随机抖动。
+  // 已去掉原先沿燃烧线描的那条发光“红线”（暖色描边）；边缘改为更碎、更随机、
+  // 不圆滑的形状——多档正弦叠高频碎波 + 每个采样点的哈希抖动（相邻点跳变 = 锯齿）。
+  const EDGE_N = 40; // 采样点数（更密 → 边缘更细腻、锯齿更明显）
+  const waveAmp = 9; // 主波幅度 px
   const waveAmp2 = 5; // 次波幅度 px
+  const waveAmp3 = 4; // 高频碎波幅度 px（让边缘不再像一条规整的曲线）
+  const jitAmp = 7; // 逐点随机抖动幅度 px（真正的不规则、不圆滑）
+  // 连续伪随机（确定性，按 x 取）：高频 → 相邻采样点取值跳变，形成锯齿而非平滑起伏
+  const edgeRand = (x: number): number => {
+    const n = Math.sin(x * 0.91 + 12.3) * 43758.5453;
+    return (n - Math.floor(n)) * 2 - 1;
+  };
   function edgeYAt(x: number, age: number): number {
     // 幅度随进度渐入，开头不闪裁（age=0 时无波浪）
     const ampIn = Math.min(1, age / 90);
     // 基准：随进度从 0 直线下移到 h+余量，确保在 wipeDuration 时已完全扫出窗口底部
     // （base 留足波幅余量）。波浪改为纯空间静态形状（不含 age 项），边缘只是干净地向下
-    // 推移，不再随时间抖动——避免尾巴阶段底边因波浪上下波动而反复闪现（原 age*0.011/0.017
-    // 时间项导致的“波动两下”）。
-    const span = h + 2 * (waveAmp + waveAmp2) + 12;
+    // 推移，不再随时间抖动——避免尾巴阶段底边因波浪上下波动而反复闪现。
+    const span = h + 2 * (waveAmp + waveAmp2 + waveAmp3) + jitAmp + 12;
     const base = (age / wipeDuration) * span;
+    const fx = x / w;
     const wave =
-      waveAmp * Math.sin((x / w) * Math.PI * 2.4) +
-      waveAmp2 * Math.sin((x / w) * Math.PI * 5.1 + 1.3);
+      waveAmp * Math.sin(fx * Math.PI * 2.4) +
+      waveAmp2 * Math.sin(fx * Math.PI * 5.1 + 1.3) +
+      waveAmp3 * Math.sin(fx * Math.PI * 11.0 + 2.1) + // 高频碎波
+      jitAmp * edgeRand(x); // 逐点抖动（不规则、不圆滑）
     return Math.max(0, base + wave * ampIn);
   }
 
@@ -223,8 +230,10 @@ function playDissolve(root: HTMLElement, onDone: () => void, particleDensity: nu
       // 使粒子恰好从燃烧边缘升起
       const t0 = (y / h) * wipeDuration;
       const wave =
-        waveAmp * Math.sin((x / w) * Math.PI * 2.4 + t0 * 0.011) +
-        waveAmp2 * Math.sin((x / w) * Math.PI * 5.1 + t0 * 0.017 + 1.3);
+        waveAmp * Math.sin((x / w) * Math.PI * 2.4) +
+        waveAmp2 * Math.sin((x / w) * Math.PI * 5.1 + 1.3) +
+        waveAmp3 * Math.sin((x / w) * Math.PI * 11.0 + 2.1) +
+        jitAmp * edgeRand(x);
       const spawnT = Math.min(
         wipeDuration - 1,
         Math.max(0, t0 - (wave / h) * wipeDuration),
@@ -334,26 +343,7 @@ function playDissolve(root: HTMLElement, onDone: () => void, particleDensity: nu
 
     ctx.clearRect(0, 0, w, h);
     // 燃烧区（线以上）不画任何填充：透明窗口直接透出便签背后的桌面内容，
-    // 火焰色余烬在桌面背景上飘散
-
-    // 燃烧前沿：沿波浪线描一条发光暖色火边（替代原极淡黑描边），
-    // 让"裁剪硬边"看起来像真实燃烧锋面而非被一刀切掉；additive + 阴影模糊形成热辉光
-    if (age < wipeDuration) {
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.shadowColor = "rgba(255,140,40,0.95)";
-      ctx.shadowBlur = 14;
-      ctx.strokeStyle = fireEdgeGrad;
-      ctx.lineWidth = 2.4;
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      for (let i = 0; i <= EDGE_N; i++) {
-        if (i === 0) ctx.moveTo(edgeX[i], edgeY[i]);
-        else ctx.lineTo(edgeX[i], edgeY[i]);
-      }
-      ctx.stroke();
-      ctx.restore();
-    }
+    // 火焰色余烬在桌面背景上飘散（不再沿燃烧线描发光描边——用户要求去掉那条红线）
 
     // ---- 粒子：网格流场（内联计算，零对象分配）+ 分桶绘制 ----
     const u = age / 1000;

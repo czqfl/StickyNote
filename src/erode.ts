@@ -348,6 +348,7 @@ function runErode(
   const emitNX = new Float32Array(ecx * ecy); // 边缘法线（单位向量，指向前沿推进方向）
   const emitNY = new Float32Array(ecx * ecy);
   const emitBurst = new Uint8Array(ecx * ecy); // 主爆发是否已触发
+  const emitW = new Float32Array(ecx * ecy); // 发射权重：末段前沿大幅降权，避免火星在终点堆成“墙”
   let ecount = 0;
   const GRAD_EPS = 4;
   for (let iy = 0; iy < ecy; iy++) {
@@ -365,6 +366,12 @@ function runErode(
       emitNX[ecount] = gx / gl;
       emitNY[ecount] = gy / gl;
       emitT[ecount] = isDissolve ? T : wipe - T; // materialize 反转
+      // 末段前沿（无论 dissolve 的顶部、还是 materialize 的底部，都是 emitT 最大的最后一点）
+      // 大幅降权：让火星不会在终点边缘持续堆积成一道“墙”。t01 越大 → 权重越小。
+      const t01 = Math.max(0, Math.min(1, emitT[ecount] / wipe));
+      let ww = 1 - t01;
+      ww = ww * ww * ww; // 立方 → 末段强抑制
+      emitW[ecount] = 0.05 + 0.95 * ww;
       ecount++;
     }
   }
@@ -381,21 +388,21 @@ function runErode(
   const eseed = new Float32Array(maxEmbers);
   let emberCount = 0;
 
-  // 在前沿点 (x,y) 沿边缘法线 (nmx,nmy) 喷出一粒火星。
+  // 在前沿点 (x,y) 沿边缘法线 (nmx,nmy) 喷出一粒火星。w 为发射权重（末段小 → 火星更小更弱）。
   // 速度 = 法线喷射(贴合边缘方向) + 上升浮力 + 随机湍流；法线让竖直锯齿段把粒子甩向侧向。
-  const spawnEmber = (x: number, y: number, nmx: number, nmy: number) => {
+  const spawnEmber = (x: number, y: number, nmx: number, nmy: number, w: number) => {
     if (emberCount >= maxEmbers) return;
     const i = emberCount++;
     ex[i] = x + (Math.random() - 0.5) * 5;
     ey[i] = y + (Math.random() - 0.5) * 4;
-    const kick = 30 + Math.random() * 70; // 法线喷射初速
+    const kick = (30 + Math.random() * 70) * (0.5 + 0.5 * w); // 末段更弱
     // materialize 时前沿推进方向与 dissolve 相反，法线取反保持"沿推进方向喷"
     const dir = isDissolve ? 1 : -1;
     evx[i] = nmx * kick * dir + (Math.random() - 0.5) * 30;
-    evy[i] = nmy * kick * dir - (46 + Math.random() * 96); // 叠加向上升腾浮力
+    evy[i] = nmy * kick * dir - (46 + Math.random() * 96);
     elife[i] = 320 + Math.random() * 560;
     eage[i] = 0;
-    esize[i] = 1.4 + Math.random() * 2.8;
+    esize[i] = (1.4 + Math.random() * 2.8) * (0.45 + 0.55 * w); // 末段更小
     eseed[i] = Math.random() * Math.PI * 2;
   };
 
@@ -540,10 +547,11 @@ function runErode(
         if (!emitBurst[i]) {
           // 前沿刚扫到：沿边缘法线爆发一簇火星（粒子密集地贴着锯齿边缘喷出）
           emitBurst[i] = 1;
-          for (let k = 0; k < burstN; k++) spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i]);
-        } else if (age < T + 150 && Math.random() < 0.28) {
-          // 前沿过后短暂尾随少量火花（余烬渐熄）
-          spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i]);
+          const bn = Math.max(0, Math.round(burstN * emitW[i])); // 末段前沿爆发数大幅减少
+          for (let k = 0; k < bn; k++) spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
+        } else if (age < T + 150 && Math.random() < 0.28 * emitW[i]) {
+          // 前沿过后短暂尾随少量火花（余烬渐熄）；末段同样抑制
+          spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
         }
       }
     }
