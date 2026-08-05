@@ -393,9 +393,17 @@ export async function openSettingsModal(): Promise<void> {
     root.classList.remove(
       "theme-dark", "theme-dracula", "theme-nord", "theme-gruvbox",
       "theme-onedark", "theme-catppuccin", "theme-tokyonight",
-      "theme-solarized-light", "theme-ayu", "theme-sakura", "theme-everforest"
+      "theme-solarized-light", "theme-ayu", "theme-sakura", "theme-everforest",
+      "theme-transparent"
     );
-    if (theme !== "light") root.classList.add("theme-" + theme);
+    // 透明主题与便签保持一致：使用 theme-dark（深色背景变量 + 浅色文字），
+    // 得到与便签同款的「深色磨砂卡片 + 浅色文字」观感；不再用无配色的 theme-transparent
+    // （该词在 styles.css 中未定义任何变量，会导致面板回退到浅色主题，与便签风格相反）。
+    if (theme === "dark" || theme === "transparent") {
+      root.classList.add("theme-dark");
+    } else if (theme !== "light") {
+      root.classList.add("theme-" + theme);
+    }
   }
 
   try {

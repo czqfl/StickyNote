@@ -1925,20 +1925,22 @@ body,
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
   background: var(--bg);
 }
-/* 透明主题：窗口本体即亚克力磨砂，面板须透明，且去掉投影 */
+/* 透明主题：与便签同款——窗口本体即亚克力磨砂，面板套一层主题色半透明果冻底
+   （--trans-opacity 由滑块控制深浅，公式与便签 .note-window.bg-transparent 完全一致），
+   分区/导航/输入控件沿用便签同款 translucent 底色，而非接近不透明的实心块。
+   整面板统一磨砂观感，不再是一块块浮在亚克力上的实心卡片。 */
 .settings-modal.bg-transparent {
-  background: transparent;
-  box-shadow: none;
+  background: color-mix(in srgb, var(--bg) calc(var(--trans-opacity, 65) * 1%), transparent);
+  /* 与便签同款：细高光描边 + 底部轻微内阴影，勾勒磨砂卡片边缘 */
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    inset 0 -14px 28px rgba(0, 0, 0, 0.08);
 }
-/* 透明模式可读性：亚克力磨砂底色取决于桌面壁纸、深浅不可控；若桌面偏亮，
-   浅色文字（.theme-dark 下 --text 为白）叠在薄半透控件底上会糊。故透明模式把
-   分区/导航/头部/输入框/下拉触发器的背景提高到接近不透明以压住亚克力，并给文字
-   加投影，确保始终清晰。窗口本体仍 transparent，亚克力在卡片缝隙与边缘透出。 */
 .settings-modal.bg-transparent .settings-header,
 .settings-modal.bg-transparent .settings-footer,
 .settings-modal.bg-transparent .settings-nav,
 .settings-modal.bg-transparent .settings-section {
-  background: color-mix(in srgb, var(--bg-bar) 85%, transparent);
+  background: color-mix(in srgb, var(--bg-bar) calc(var(--trans-opacity, 65) * 1%), transparent);
   border-color: color-mix(in srgb, var(--border) 80%, transparent);
 }
 .settings-modal.bg-transparent .settings-input,
@@ -1947,7 +1949,7 @@ body,
 .settings-modal.bg-transparent .shortcut-rec,
 .settings-modal.bg-transparent .shortcut-confirm,
 .settings-modal.bg-transparent .cs-trigger {
-  background: color-mix(in srgb, var(--bg-bar) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-bar) calc(var(--trans-opacity, 65) * 1%), transparent);
   color: var(--text);
   border-color: color-mix(in srgb, var(--border) 80%, transparent);
 }
@@ -1957,7 +1959,6 @@ body,
 .settings-modal.bg-transparent .nav-item.active {
   background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
-/* 透明模式下不再加文字投影：85% 接近不透明的底已保证可读，投影只会让小字发虚 */
 
 /* ===== 设置弹窗：左侧菜单 + 右侧内容 两栏布局 ===== */
 .settings-layout-body {
