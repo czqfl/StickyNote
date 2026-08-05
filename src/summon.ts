@@ -110,7 +110,7 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
 
   // ---- 成形线：波浪形边缘，从窗口底边向顶边推进 ----
   const wipeDuration = 320; // 成形完成用时 ms（与关闭动画一致）
-  const duration = 900; // 总时长 ms（成形 + 粒子飘散收尾）
+  const duration = 1400; // 总时长 ms（成形 + 粒子飘散收尾），延长让粒子更舒缓地随风飘散
 
   // 波浪成形线的纵向位置：基准随进度上移 + 两档频率的正弦起伏 + 抖动
   const EDGE_N = 26; // 采样点数（左右方向的波浪细腻度）
@@ -147,9 +147,8 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
   const pspawnT = new Float32Array(pcount);
   const plife = new Float32Array(pcount);
   const priseMul = new Float32Array(pcount);
-  const pjitX = new Float32Array(pcount);
-  const pjitY = new Float32Array(pcount);
   const pphase = new Float32Array(pcount);
+  const psway = new Float32Array(pcount); // 随风摇摆速度 px/s
   const pr = new Float32Array(pcount);
   const palpha = new Float32Array(pcount);
 
@@ -173,9 +172,8 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
       pspawnT[pi] = spawnT;
       plife[pi] = (duration - spawnT) * (0.8 + Math.random() * 0.2);
       priseMul[pi] = 0.9 + Math.random() * 0.2;
-      pjitX[pi] = (Math.random() - 0.5) * 10;
-      pjitY[pi] = (Math.random() - 0.5) * 10;
       pphase[pi] = Math.random() * Math.PI * 2;
+      psway[pi] = 18 + Math.random() * 34; // 随风摇摆速度 px/s（18~52）
       pr[pi] = 0.9 + Math.random() * 0.9;
       palpha[pi] = 0.4 + Math.random() * 0.35;
       pi++;
@@ -310,7 +308,7 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
         const c2 = Math.cos(FLOW_AX2 * xx + FLOW_BY2 * yy + u * FLOW_W2 + 1.3);
         const idx = rowBase + gx;
         gvx[idx] = FLOW_A1 * FLOW_BY1 * c1 + FLOW_A2 * FLOW_BY2 * c2;
-        gvy[idx] = -(FLOW_A1 * FLOW_AX1 * c1 + FLOW_A2 * FLOW_AX2 * c2) - (62 + 14 * Math.sin(xx * 0.006 + u * 0.6));
+        gvy[idx] = -(FLOW_A1 * FLOW_AX1 * c1 + FLOW_A2 * FLOW_AX2 * c2) - (50 + 12 * Math.sin(xx * 0.005 + u * 0.5));
       }
     }
 
@@ -338,8 +336,12 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
       const vy = ifx * ify * gvy[idx] + sfx * ify * gvy[idx + 1] + ifx * sfy * gvy[idx + GX] + sfx * sfy * gvy[idx + GX + 1];
 
       const rm = priseMul[i];
-      px[i] += (vx * rm + pjitX[i]) * dt;
-      py[i] += (vy * rm + pjitY[i]) * dt;
+      // 随风摇摆：横向正弦摇曳 + 轻微纵向浮动，幅度随粒子随机，
+      // 使整片粒子像被气流托着左右飘忽（而非直线飞走）
+      const sway = Math.sin(pa * 0.006 + pphase[i]) * psway[i];
+      const bob = Math.cos(pa * 0.005 + pphase[i] * 1.3) * psway[i] * 0.35;
+      px[i] += (vx * rm + sway) * dt;
+      py[i] += (vy * rm + bob) * dt;
 
       // fadeIn / fadeOut / flicker：用多项式替代 Math.pow，减少逐粒数学调用
       const fadeIn = pa < 60 ? pa * 0.016666667 : 1; // /60
