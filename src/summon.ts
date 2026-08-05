@@ -180,12 +180,16 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
     }
   }
 
-  const start = performance.now();
+  // 时间线以真实墙钟推进（age = now - start），首帧落定时才开始计时。
+  // 这样窗口被遮挡/后台节流、rAF 与备用计时器被降速时，动画仍按真实耗时收尾，
+  // 不会"卡在半途很久"。clamp 后的 dt 只用于粒子位移积分，不用于时间线。
+  let start = 0;
+  let started = false;
   // 帧驱动：优先 rAF（对齐垂直同步，动画更顺滑）；窗口被后台节流导致 rAF 停摆时，
   // 由 40ms 备用计时器检测并兜底推进（与旧 setTimeout 方案同等防卡死保证）
   let lastPaint = 0;
   let ended = false;
-  let prevNow = start;
+  let prevNow = 0;
 
   const stopLoop = () => {
     ended = true;
@@ -245,17 +249,20 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
   const GXm2 = GX - 2;
   const GYm2 = GY - 2;
 
-  // age 由 dt 累积（而非 now-start 真实时间）：帧慢时 dt 被限幅，age 同步变慢，
-  // 动画变为"慢放"而非"冻结后瞬间消失"——粒子始终与位移同步淡出
-  let ageAccum = 0;
-
   const frame = (now: number) => {
+    // 首帧落定时间基准：用真实墙钟，避免启动延迟带来的负偏移
+    if (!started) {
+      started = true;
+      start = now;
+      prevNow = now;
+    }
+    // 时间线 age 走真实墙钟（now - start）：窗口被遮挡/后台节流时仍按真实耗时推进，
+    // 不会"卡在半途很久"。位移积分才用 clamp 后的 dt，防止跳帧把粒子甩飞。
+    const age = now - start;
     // 按真实帧间隔积分（rAF 在 144Hz 下帧间隔约 7ms，固定 0.016 会整体加速）；
     // 限幅避免后台节流后的跳帧把粒子瞬间甩飞
     const dt = Math.min(0.05, Math.max(0.001, (now - prevNow) / 1000));
     prevNow = now;
-    ageAccum += dt * 1000;
-    const age = ageAccum;
 
     // ---- 波浪成形线采样（从底向顶）----
     for (let i = 0; i <= EDGE_N; i++) edgeY[i] = edgeYAt(edgeX[i], age);
