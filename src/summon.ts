@@ -117,14 +117,16 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
   const waveAmp = 10; // 主波幅度 px
   const waveAmp2 = 5; // 次波幅度 px
   function edgeYAt(x: number, age: number): number {
-    const prog = Math.min(1, age / wipeDuration);
     // 幅度随进度渐入，开头不闪现（age=0 时无波浪）
     const ampIn = Math.min(1, age / 90);
-    // 成形线基准：底边下方 h+10 → 顶边上方 -10，随进度上移（与关闭动画方向相反）
-    const base = h + 10 - prog * (h + 20);
+    // 基准：从窗口底边下方余量直线移到顶边上方余量，wipeDuration 时完全扫出顶部
+    // （base 留足波幅余量）。波浪为纯空间静态形状（去掉 age 时间项），边缘干净上移，
+    // 不再随时间抖动，尾巴阶段不反复闪现。
+    const span = h + 2 * (waveAmp + waveAmp2) + 12;
+    const base = span - (age / wipeDuration) * span;
     const wave =
-      waveAmp * Math.sin((x / w) * Math.PI * 2.4 + age * 0.011) +
-      waveAmp2 * Math.sin((x / w) * Math.PI * 5.1 + age * 0.017 + 1.3);
+      waveAmp * Math.sin((x / w) * Math.PI * 2.4) +
+      waveAmp2 * Math.sin((x / w) * Math.PI * 5.1 + 1.3);
     return Math.max(-10, Math.min(h + 10, base + wave * ampIn));
   }
 

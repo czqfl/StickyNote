@@ -142,13 +142,17 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
   const waveAmp = 10; // 主波幅度 px
   const waveAmp2 = 5; // 次波幅度 px
   function edgeYAt(x: number, age: number): number {
-    const prog = Math.min(1, age / wipeDuration);
     // 幅度随进度渐入，开头不闪裁（age=0 时无波浪）
     const ampIn = Math.min(1, age / 90);
-    const base = prog * (h + 10);
+    // 基准：随进度从 0 直线下移到 h+余量，确保在 wipeDuration 时已完全扫出窗口底部
+    // （base 留足波幅余量）。波浪改为纯空间静态形状（不含 age 项），边缘只是干净地向下
+    // 推移，不再随时间抖动——避免尾巴阶段底边因波浪上下波动而反复闪现（原 age*0.011/0.017
+    // 时间项导致的“波动两下”）。
+    const span = h + 2 * (waveAmp + waveAmp2) + 12;
+    const base = (age / wipeDuration) * span;
     const wave =
-      waveAmp * Math.sin((x / w) * Math.PI * 2.4 + age * 0.011) +
-      waveAmp2 * Math.sin((x / w) * Math.PI * 5.1 + age * 0.017 + 1.3);
+      waveAmp * Math.sin((x / w) * Math.PI * 2.4) +
+      waveAmp2 * Math.sin((x / w) * Math.PI * 5.1 + 1.3);
     return Math.max(0, base + wave * ampIn);
   }
 
