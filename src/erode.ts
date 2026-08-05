@@ -271,47 +271,74 @@ function runErode(
   }
   ctx.scale(dpr, dpr);
 
-  // 暖色余烬精灵（中心白热点 → 橙 → 透明）
+  // 余烬精灵：三档温度（白热点 / 橙 / 暗红），粒子随生命冷却变色、收缩。
+  // 出生即在侵蚀前沿处最热最亮，离开前沿后逐渐冷却——与边缘物理联动更直观。
   const SS = 10;
-  const sprite = document.createElement("canvas");
-  sprite.width = SS;
-  sprite.height = SS;
-  {
-    const sctx = sprite.getContext("2d");
+  const makeSprite = (stops: [number, string][]): HTMLCanvasElement => {
+    const c = document.createElement("canvas");
+    c.width = SS;
+    c.height = SS;
+    const sctx = c.getContext("2d");
     if (sctx) {
       const g = sctx.createRadialGradient(SS / 2, SS / 2, 0, SS / 2, SS / 2, SS / 2);
-      g.addColorStop(0, "rgba(255,240,210,1)");
-      g.addColorStop(0.35, "rgba(255,170,80,0.8)");
-      g.addColorStop(1, "rgba(255,120,40,0)");
+      for (const [pos, col] of stops) g.addColorStop(pos, col);
       sctx.fillStyle = g;
       sctx.fillRect(0, 0, SS, SS);
     }
-  }
+    return c;
+  };
+  const spriteHot = makeSprite([
+    [0, "rgba(255,252,240,1)"],
+    [0.3, "rgba(255,220,150,0.9)"],
+    [1, "rgba(255,180,90,0)"],
+  ]);
+  const spriteMid = makeSprite([
+    [0, "rgba(255,210,140,1)"],
+    [0.35, "rgba(255,150,60,0.8)"],
+    [1, "rgba(255,110,40,0)"],
+  ]);
+  const spriteCool = makeSprite([
+    [0, "rgba(255,150,80,0.9)"],
+    [0.4, "rgba(200,80,30,0.6)"],
+    [1, "rgba(140,50,20,0)"],
+  ]);
 
-  // 发射点网格：位于侵蚀前沿处，向上升腾火星
+  // 发射点网格：铺满整面，位于锯齿侵蚀前沿上（每个点在其 T 时刻正处前沿）。
+  // 预计算各点的**边缘法线**（T 场梯度方向 = 前沿推进方向），粒子沿法线喷射，
+  // 于是水平边缘段向上喷、竖直锯齿段向侧向喷——粒子流贴合破碎边缘形状，物理联动更紧。
   const density = Math.max(0, Math.min(100, particleDensity)) / 100;
-  const emitSpacing = 16;
+  const emitSpacing = 10; // 更密的发射点 → 粒子更多、边缘轨迹更细腻
   const ecx = Math.ceil(w / emitSpacing);
   const ecy = Math.ceil(h / emitSpacing);
   const emitX = new Float32Array(ecx * ecy);
   const emitY = new Float32Array(ecx * ecy);
   const emitT = new Float32Array(ecx * ecy); // 各发射点被前沿扫到的时刻
+  const emitNX = new Float32Array(ecx * ecy); // 边缘法线（单位向量，指向前沿推进方向）
+  const emitNY = new Float32Array(ecx * ecy);
+  const emitBurst = new Uint8Array(ecx * ecy); // 主爆发是否已触发
   let ecount = 0;
+  const GRAD_EPS = 4;
   for (let iy = 0; iy < ecy; iy++) {
     for (let ix = 0; ix < ecx; ix++) {
       const nx = (ix + 0.5) * emitSpacing;
       const ny = (iy + 0.5) * emitSpacing;
       emitX[ecount] = nx;
       emitY[ecount] = ny;
-      let T = dissolveTimeAt(nx, ny);
-      if (!isDissolve) T = wipe - T; // materialize 反转
-      emitT[ecount] = T;
+      const T = dissolveTimeAt(nx, ny);
+      // 有限差分求 T 场梯度 → 边缘法线（materialize 用同一空间法线，方向随后处理）
+      const gx = dissolveTimeAt(nx + GRAD_EPS, ny) - dissolveTimeAt(nx - GRAD_EPS, ny);
+      const gy = dissolveTimeAt(nx, ny + GRAD_EPS) - dissolveTimeAt(nx, ny - GRAD_EPS);
+      let gl = Math.sqrt(gx * gx + gy * gy);
+      if (gl < 1e-3) gl = 1e-3;
+      emitNX[ecount] = gx / gl;
+      emitNY[ecount] = gy / gl;
+      emitT[ecount] = isDissolve ? T : wipe - T; // materialize 反转
       ecount++;
     }
   }
 
-  // 余烬粒子池（SoA + swap-remove）
-  const maxEmbers = Math.round(120 + density * 480);
+  // 余烬粒子池（SoA + swap-remove），数量随强度大幅提升
+  const maxEmbers = Math.round(360 + density * 1240); // 360 ~ 1600
   const ex = new Float32Array(maxEmbers);
   const ey = new Float32Array(maxEmbers);
   const evx = new Float32Array(maxEmbers);
@@ -322,16 +349,21 @@ function runErode(
   const eseed = new Float32Array(maxEmbers);
   let emberCount = 0;
 
-  const spawnEmber = (x: number, y: number) => {
+  // 在前沿点 (x,y) 沿边缘法线 (nmx,nmy) 喷出一粒火星。
+  // 速度 = 法线喷射(贴合边缘方向) + 上升浮力 + 随机湍流；法线让竖直锯齿段把粒子甩向侧向。
+  const spawnEmber = (x: number, y: number, nmx: number, nmy: number) => {
     if (emberCount >= maxEmbers) return;
     const i = emberCount++;
-    ex[i] = x + (Math.random() - 0.5) * 8;
-    ey[i] = y + (Math.random() - 0.5) * 6;
-    evx[i] = (Math.random() - 0.5) * 26;
-    evy[i] = -(50 + Math.random() * 90); // 向上升腾
-    elife[i] = 380 + Math.random() * 480;
+    ex[i] = x + (Math.random() - 0.5) * 5;
+    ey[i] = y + (Math.random() - 0.5) * 4;
+    const kick = 30 + Math.random() * 70; // 法线喷射初速
+    // materialize 时前沿推进方向与 dissolve 相反，法线取反保持"沿推进方向喷"
+    const dir = isDissolve ? 1 : -1;
+    evx[i] = nmx * kick * dir + (Math.random() - 0.5) * 30;
+    evy[i] = nmy * kick * dir - (46 + Math.random() * 96); // 叠加向上升腾浮力
+    elife[i] = 320 + Math.random() * 560;
     eage[i] = 0;
-    esize[i] = 1.2 + Math.random() * 2.4;
+    esize[i] = 1.4 + Math.random() * 2.8;
     eseed[i] = Math.random() * Math.PI * 2;
   };
 
@@ -461,14 +493,20 @@ function runErode(
     pushMask(age, false);
     applyOpacity(age);
 
-    // ---- 余烬：发射 + 更新 + 绘制 ----
+    // ---- 余烬：前沿到达时爆发 + 短暂尾随火花 + 更新 + 绘制 ----
     ctx.clearRect(0, 0, w, h);
     if (age < wipe + 60) {
+      const burstN = 2 + Math.round(density * 5); // 每个前沿点爆发 2~7 粒
       for (let i = 0; i < ecount; i++) {
         const T = emitT[i];
-        // 前沿正扫到该发射点（T 刚过 age 一小段窗口）时持续喷火星
-        if (T <= age && T + 130 > age && Math.random() < 0.5) {
-          spawnEmber(emitX[i], emitY[i]);
+        if (age < T) continue;
+        if (!emitBurst[i]) {
+          // 前沿刚扫到：沿边缘法线爆发一簇火星（粒子密集地贴着锯齿边缘喷出）
+          emitBurst[i] = 1;
+          for (let k = 0; k < burstN; k++) spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i]);
+        } else if (age < T + 150 && Math.random() < 0.28) {
+          // 前沿过后短暂尾随少量火花（余烬渐熄）
+          spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i]);
         }
       }
     }
@@ -491,11 +529,14 @@ function runErode(
       ex[i] += (evx[i] + sway) * dt;
       ey[i] += evy[i] * dt;
       const life01 = a / life;
-      const alpha = (1 - life01) * 0.9;
+      const alpha = (1 - life01) * (1 - life01 * 0.3); // 末端更快淡出
       if (alpha < 0.02) continue;
       ctx.globalAlpha = alpha;
-      const r = esize[i];
-      ctx.drawImage(sprite, ex[i] - r, ey[i] - r, r * 2, r * 2);
+      // 冷却收缩：出生最大最热，离开前沿后缩小变暗
+      const r = esize[i] * (1 - life01 * 0.55);
+      // 按温度选精灵：热(白) → 中(橙) → 冷(暗红)
+      const sp = life01 < 0.34 ? spriteHot : life01 < 0.7 ? spriteMid : spriteCool;
+      ctx.drawImage(sp, ex[i] - r, ey[i] - r, r * 2, r * 2);
     }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
