@@ -1950,13 +1950,17 @@ struct ViewerData {
 struct ViewerState(Mutex<Option<ViewerData>>);
 
 #[tauri::command]
-fn open_image_viewer(
+async fn open_image_viewer(
     app: AppHandle,
-    state: State<ViewerState>,
+    state: State<'_, ViewerState>,
     urls: Vec<String>,
     index: usize,
 ) -> Result<(), String> {
-    *state.0.lock().unwrap() = Some(ViewerData { urls, index });
+    // 锁仅用于写入暂存数据，立即释放，绝不跨 await 持有（否则 get_viewer_data 取数据时死锁）
+    {
+        let mut s = state.0.lock().unwrap();
+        *s = Some(ViewerData { urls, index });
+    }
     const LABEL: &str = "imageviewer";
     if let Some(win) = app.get_webview_window(LABEL) {
         // 窗口已存在：刷新暂存数据并通知前端重新拉取
@@ -1965,6 +1969,7 @@ fn open_image_viewer(
         let _ = win.set_focus();
         return Ok(());
     }
+    // 异步命令：窗口创建在 async 运行时线程上进行，避免在主线程同步 build WebView2 造成的死锁
     let win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
         .title("图片预览")
         .decorations(true)
