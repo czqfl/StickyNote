@@ -20,7 +20,6 @@ import {
 import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
-import { requestParticleDissolveClose, cancelDissolve } from "./dissolve";
 import { playSummonMaterialize, cancelSummon } from "./summon";
 import { requestErodeDissolveClose, playErodeMaterialize, cancelErode } from "./erode";
 import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
@@ -822,7 +821,6 @@ export function mountNoteApp(noteId: string, preset = "") {
     if (closing) {
       closing = false;
       finished = false;
-      cancelDissolve();
       cancelErode();
       cancelSummon();
     }
@@ -2015,7 +2013,6 @@ export function mountNoteApp(noteId: string, preset = "") {
     if (closing) {
       closing = false;
       finished = false;
-      cancelDissolve();
       cancelErode();
     }
     cancelSummon();
@@ -2043,8 +2040,7 @@ export function mountNoteApp(noteId: string, preset = "") {
     // 同时作废任何“等待 getSettings 的待播放呼出”，确保关闭能干净接管——
     // 与“关闭被呼出打断”完全对称：双向都随时可打断对方。
     cancelSummon();
-    cancelErode();
-    cancelDissolve(); // 防御：清掉任何残留的关闭动画，避免叠加
+    cancelErode(); // 防御：清掉任何残留的关闭/侵蚀动画，避免叠加
     summonSeq++; // 作废进行中的呼出（其 getSettings().then 会检查 seq 后跳过）
     closing = true;
     finished = false;
@@ -2082,12 +2078,13 @@ export function mountNoteApp(noteId: string, preset = "") {
         // 作废本次关闭，避免关闭动画与呼出动画同时改 clip-path 打架导致“卡住”。
         if (!closing) return;
         const intensity = s.particle_intensity ?? 50;
-        if (s.particle_mode === "erode") requestErodeDissolveClose(finish, intensity);
-        else requestParticleDissolveClose(finish, intensity);
+        // 火焰消散（dissolve）已移除：关闭统一使用侵蚀消散（唯一保留的关闭动画），
+        // 与粒子风格设置无关（该设置现在只控制呼出/成形效果）。
+        requestErodeDissolveClose(finish, intensity);
       })
       .catch(() => {
         if (!closing) return;
-        requestParticleDissolveClose(finish);
+        requestErodeDissolveClose(finish);
       });
   }
 
