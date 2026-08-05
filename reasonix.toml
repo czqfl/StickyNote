@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=cat \"$APPDATA/StickyNotes/settings.json\" 2>/dev/null | head -c 2000; echo; echo \"---exit:$?\"", "Edit", "Bash=cd /d/StickyNote && npm run build 2>&1 | tail -20", "Bash=cd /d/StickyNote && npm run build 2>&1 | tail -8", "Bash=cd /d/StickyNote && npm run build 2>&1 | tail -6"]

@@ -29,9 +29,6 @@
 let eroding = false;
 let materializing = false;
 
-let rafId = 0;
-let backupId = 0;
-
 /** 当前侵蚀动画的“立即中止”句柄（由 runErode 注册；cancelErode 调用）。
  *  中止 = 停帧 + 复原页面（保持可见，供“呼出打断关闭”等快速切换）。 */
 let cancelErodeFn: (() => void) | null = null;
@@ -49,11 +46,6 @@ export function cancelErode(): void {
   if (!eroding && !materializing) return;
   eroding = false;
   materializing = false;
-  cancelAnimationFrame(rafId);
-  if (backupId) {
-    window.clearInterval(backupId);
-    backupId = 0;
-  }
   const root = document.querySelector(".note-window") as HTMLElement | null;
   if (root) restoreRoot(root);
   document.querySelector(".erode-canvas")?.remove();
@@ -126,7 +118,9 @@ export function requestErodeDissolveClose(onDone: () => void, particleDensity = 
 
 /** 播放「侵蚀成形」呼出动画（关闭的倒放：顶部向下成形）；收尾自动复原页面。 */
 export function playErodeMaterialize(root: HTMLElement, particleDensity = 50): void {
-  if (materializing) return;
+  // 强制接管：若已有侵蚀动画在播放（快速呼出时上一轮动画未收尾、materializing 残留），
+  // 先取消旧的再启动新的，杜绝「呼出被静默拒绝 → 窗口空画面永久卡死」。
+  if (materializing || eroding) cancelErode();
   materializing = true;
   let aborted = false;
   let stopRun: (() => void) | null = null;
@@ -445,28 +439,38 @@ function runErode(
 
   // 蒙版替换：先解码（new Image onload）再 set，避免逐帧 dataURL 闪烁
   let lastMaskPush = -1;
+  let maskSeq = 0; // 防乱序：Image 解码异步且不保证按序回调，旧帧晚到会覆盖新帧
   const pushMask = (age: number, force: boolean): void => {
     if (!force && age - lastMaskPush < 30) return; // ~30Hz 更新蒙版即可（羽化边缘平滑）
     lastMaskPush = age;
     renderMask(age);
     const url = maskCanvas.toDataURL();
+    const seq = ++maskSeq;
     const im = new Image();
     im.onload = () => {
-      if (!endedLocal) setMask(url);
+      if (endedLocal || seq !== maskSeq) return; // 只应用最新一帧，丢弃迟到的旧帧
+      setMask(url);
     };
     im.src = url;
   };
 
-  // 全局透明度淡出：dissolve 1→0；materialize 0→1
+  // 全局透明度：dissolve 从完全不透明缓慢淡出到透明度 70%（opacity 0.3）即止——
+  // 剩余画面由后续「火烧/关闭」收尾，无需完全透明；materialize 从全透明淡入到不透明。
+  // 淡出放缓：dissolve 用整个动画时长（wipe+tailMs）完成淡出，而不是随 wipe 一起结束。
   const applyOpacity = (age: number): void => {
-    let p = age / wipe;
+    const fadeSpan = isDissolve ? duration : wipe;
+    let p = age / fadeSpan;
     if (p < 0) p = 0;
     else if (p > 1) p = 1;
-    const o = isDissolve ? 1 - p : p;
+    const o = isDissolve ? 1 - p * 0.7 : p;
     root.style.opacity = o.toFixed(3);
   };
 
   // ---- 帧循环 ----
+  // rafId/backupId 是本动画实例的局部句柄（不能是模块级：多个动画实例并存时
+  // 共享句柄会导致 A 的 stopLoop 取消掉 B 的 rAF，帧循环互相踩踏、动画卡死）。
+  let rafId = 0;
+  let backupId = 0;
   let start = 0;
   let started = false;
   let prevNow = 0;
@@ -524,6 +528,7 @@ function runErode(
   };
 
   const frame = (now: number) => {
+    if (endedLocal) return; // 已取消/收尾：丢弃迟到帧（rAF 回调入队后无法撤销，必须在此拦截）
     if (!started) {
       started = true;
       start = now;

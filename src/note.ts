@@ -20,9 +20,8 @@ import {
 import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
-import { playSummonMaterialize, cancelSummon } from "./summon";
 import { requestErodeDissolveClose, playErodeMaterialize, cancelErode } from "./erode";
-import { requestGlowDissolveClose, cancelGlowDissolve } from "./glow-dissolve";
+import { requestGlowDissolveClose, playGlowMaterialize, cancelGlowParticles } from "./glow-particles";
 import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
 import { applyPanelBackground } from "./panel-bg";
 import {
@@ -823,8 +822,10 @@ export function mountNoteApp(noteId: string, preset = "") {
       closing = false;
       finished = false;
       cancelErode();
-      cancelGlowDissolve();
-      cancelSummon();
+      cancelGlowParticles();
+      // 关闭动画已被打断：把窗口视为“从空画面呼出”，补播呼出成形动画——
+      // 否则 wasHidden 仍为 false（finish 未执行），呼出动画被吞掉、窗口空着。
+      wasHidden = true;
     }
     // 呼出动画：仅从“隐藏态”呼出时播放（隐藏时窗口保持空画面），
     // 已可见的便签不重复动画；关闭动画播放中也不插入
@@ -843,8 +844,7 @@ export function mountNoteApp(noteId: string, preset = "") {
         }
         return;
       }
-      // 非透明主题：按粒子强度/风格设置启动呼出动画
-      let usedMode = "flame";
+      // 非透明主题：按粒子强度/风格设置启动呼出动画（默认粒子光效；erode 用侵蚀）
       const seq = summonSeq; // 快照：等待 getSettings 期间若被隐藏/关闭作废则跳过
       getSettings()
         .then((s) => {
@@ -852,15 +852,13 @@ export function mountNoteApp(noteId: string, preset = "") {
           // 避免呼出动画与关闭动画同时改 clip-path 打架导致“卡住”。
           if (seq !== summonSeq || closing || deleted) return;
           const intensity = s.particle_intensity ?? 50;
-          usedMode = s.particle_mode === "erode" ? "erode" : "flame";
-          if (usedMode === "erode") playErodeMaterialize(noteWindow, intensity);
-          else playSummonMaterialize(noteWindow, intensity);
+          if (s.particle_mode === "erode") playErodeMaterialize(noteWindow, intensity);
+          else playGlowMaterialize(noteWindow, intensity);
         })
         .catch(() => {
           if (seq !== summonSeq || closing || deleted) return;
-          // 读取失败时回退到对应风格（保持 erode 仍是 erode，避免无声切回火焰）
-          if (usedMode === "erode") playErodeMaterialize(noteWindow);
-          else playSummonMaterialize(noteWindow);
+          // 读取失败回退到粒子光效呼出（火焰已移除）
+          playGlowMaterialize(noteWindow);
         });
     }
   });
@@ -2009,16 +2007,16 @@ export function mountNoteApp(noteId: string, preset = "") {
 
   btnTray.addEventListener("click", () => {
     // 隐藏前先进入"空画面"状态：下次呼出时粒子成形动画从空开始，不闪出旧内容。
-    // 作废尚未开始的呼出（getSettings 等待中），取消进行中的呼出动画；
-    // 若关闭动画正在播放，也一并取消（取消不会触发 finish/隐藏，托盘已直接隐藏）。
+    // 作废尚未开始的呼出（getSettings 等待中），取消进行中的呼出/关闭动画——
+    // **无条件取消两个动画**（不能只在 closing 时取消：侵蚀呼出动画播放中隐藏时
+    // 若不清 materializing，下次呼出会被 playErodeMaterialize 拒绝，窗口显示空画面卡死）。
     summonSeq++;
     if (closing) {
       closing = false;
       finished = false;
-      cancelErode();
-      cancelGlowDissolve();
     }
-    cancelSummon();
+    cancelErode();
+    cancelGlowParticles();
     noteWindow.style.clipPath = "inset(0 0 100% 0)";
     noteWindow.style.boxShadow = "none";
     wasHidden = true;
@@ -2042,9 +2040,8 @@ export function mountNoteApp(noteId: string, preset = "") {
     // 呼出/成形动画若在播放，先立即收尾复原页面，避免两个动画同时改 clip-path / mask；
     // 同时作废任何“等待 getSettings 的待播放呼出”，确保关闭能干净接管——
     // 与“关闭被呼出打断”完全对称：双向都随时可打断对方。
-    cancelSummon();
-    cancelErode(); // 防御：清掉任何残留的关闭/侵蚀动画，避免叠加
-    cancelGlowDissolve(); // 清掉残留的粒子光效消散动画
+    cancelGlowParticles(); // 取消进行中的粒子光效呼出/关闭动画
+    cancelErode(); // 防御：清掉任何残留的侵蚀动画，避免叠加
     summonSeq++; // 作废进行中的呼出（其 getSettings().then 会检查 seq 后跳过）
     closing = true;
     finished = false;
@@ -2082,14 +2079,13 @@ export function mountNoteApp(noteId: string, preset = "") {
         // 作废本次关闭，避免关闭动画与呼出动画同时改 clip-path 打架导致“卡住”。
         if (!closing) return;
         const intensity = s.particle_intensity ?? 50;
-        // 关闭动画按粒子风格选择：particle=粒子光效（鸿蒙通知删除·从下往上发光微粒）；
-        // flame/erode=侵蚀消散（火焰关闭动画已移除，flame 的关闭回退为侵蚀）。
-        if (s.particle_mode === "particle") requestGlowDissolveClose(finish, intensity);
-        else requestErodeDissolveClose(finish, intensity);
+        // 关闭动画：默认粒子光效（鸿蒙通知删除同款·与呼出共用同一套粒子）；erode=侵蚀消散。
+        if (s.particle_mode === "erode") requestErodeDissolveClose(finish, intensity);
+        else requestGlowDissolveClose(finish, intensity);
       })
       .catch(() => {
         if (!closing) return;
-        requestErodeDissolveClose(finish);
+        requestGlowDissolveClose(finish);
       });
   }
 

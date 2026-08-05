@@ -351,7 +351,7 @@ function defaultSettings(): Settings {
     glass_blur: 55,
     transparent_opacity: 65,
     particle_intensity: 50,
-    particle_mode: "flame",
+    particle_mode: "particle",
   } as Settings;
 }
 
@@ -486,9 +486,8 @@ export async function openSettingsModal(): Promise<void> {
               <div class="settings-row">
                 <label class="settings-label">粒子风格</label>
                 <select class="settings-select" id="set-particle-mode">
-                  <option value="flame">火焰成形（呼出·波浪燃烧线）</option>
-                  <option value="erode">侵蚀（呼出+关闭·烧纸/酸蚀·羽化软边）</option>
-                  <option value="particle">粒子光效（关闭·鸿蒙通知删除·冷光微粒）</option>
+                  <option value="particle">粒子光效</option>
+                  <option value="erode">侵蚀</option>
                 </select>
               </div>
             </div>
@@ -808,7 +807,6 @@ export async function openSettingsModal(): Promise<void> {
   enhanceSelect(targetLatinSel);
   enhanceSelect(mdThemeSel);
   enhanceSelect(themeSel);
-  enhanceSelect(overlay.querySelector("#set-particle-mode") as HTMLSelectElement);
 
   // 透明主题实时预览：切到/切离透明时即时启停 DWM 实时模糊（零延迟）。
   // “背景不透明度”0% = 关闭 DWM 效果完全透明；>0% = 系统亚克力实时模糊 +
@@ -944,9 +942,12 @@ export async function openSettingsModal(): Promise<void> {
   particleIntensitySlider.addEventListener("input", () => {
     particleIntensityVal.textContent = particleIntensitySlider.value;
   });
-  // ---- 粒子风格：flame=火焰呼出、erode=侵蚀呼出+关闭、particle=粒子光效关闭（呼出回退火焰）----
+  // ---- 粒子风格：particle=粒子光效（呼出+关闭·默认）、erode=侵蚀（呼出+关闭）；旧值 flame 归入 particle ----
+  // 注意：必须先设置 value 再 enhanceSelect，否则自定义下拉的 label 会停在第一个选项上
+  // （enhanceSelect 内部会立即按当前选中项渲染文本，后设 value 不会触发它重新同步）。
   const particleModeSel = overlay.querySelector("#set-particle-mode") as HTMLSelectElement;
-  particleModeSel.value = draft.particle_mode || "flame";
+  particleModeSel.value = draft.particle_mode === "erode" ? "erode" : "particle";
+  enhanceSelect(particleModeSel);
 
   // ---- 全局默认背景图 ----
   const bgUploadBtn = overlay.querySelector("#bg-upload") as HTMLButtonElement;
