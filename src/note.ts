@@ -20,7 +20,7 @@ import {
 import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
-import { requestParticleDissolveClose } from "./dissolve";
+import { requestParticleDissolveClose, cancelDissolve } from "./dissolve";
 import { playSummonMaterialize, cancelSummon } from "./summon";
 import { requestErodeDissolveClose, playErodeMaterialize, cancelErode } from "./erode";
 import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
@@ -812,8 +812,20 @@ export function mountNoteApp(noteId: string, preset = "") {
   // 呼出动画标记：便签被隐藏（消散/托盘）后置 true，下次呼出播放粒子成形动画；
   // 仅记录“隐藏→呼出”这一种转移，已可见的便签收到 summoned 不重复动画。
   let wasHidden = false;
+  // 呼出动画“代次”：呼出是异步启动的（先 getSettings），期间若又触发托盘隐藏/关闭，
+  // 递增此计数作废尚未开始的呼出动画，避免在已隐藏窗口上播放/与关闭动画打架。
+  let summonSeq = 0;
   appWindow.listen("summoned", () => {
     if (collapsed) expandFromEdge(false);
+    // 呼出打断进行中的关闭动画：先取消关闭（取消会复原页面、且不会触发 finish/隐藏），
+    // 再按普通呼出流程处理，避免“关闭动画没播完就呼出”导致窗口又被隐藏/动画卡住。
+    if (closing) {
+      closing = false;
+      finished = false;
+      cancelDissolve();
+      cancelErode();
+      cancelSummon();
+    }
     // 呼出动画：仅从“隐藏态”呼出时播放（隐藏时窗口保持空画面），
     // 已可见的便签不重复动画；关闭动画播放中也不插入
     if (wasHidden && !closing) {
@@ -833,14 +845,19 @@ export function mountNoteApp(noteId: string, preset = "") {
       }
       // 非透明主题：按粒子强度/风格设置启动呼出动画
       let usedMode = "flame";
+      const seq = summonSeq; // 快照：等待 getSettings 期间若被隐藏/关闭作废则跳过
       getSettings()
         .then((s) => {
+          // getSettings 是异步的：等待期间若又触发了关闭/托盘隐藏/删除，作废本次呼出，
+          // 避免呼出动画与关闭动画同时改 clip-path 打架导致“卡住”。
+          if (seq !== summonSeq || closing || deleted) return;
           const intensity = s.particle_intensity ?? 50;
           usedMode = s.particle_mode === "erode" ? "erode" : "flame";
           if (usedMode === "erode") playErodeMaterialize(noteWindow, intensity);
           else playSummonMaterialize(noteWindow, intensity);
         })
         .catch(() => {
+          if (seq !== summonSeq || closing || deleted) return;
           // 读取失败时回退到对应风格（保持 erode 仍是 erode，避免无声切回火焰）
           if (usedMode === "erode") playErodeMaterialize(noteWindow);
           else playSummonMaterialize(noteWindow);
@@ -1992,7 +2009,15 @@ export function mountNoteApp(noteId: string, preset = "") {
 
   btnTray.addEventListener("click", () => {
     // 隐藏前先进入"空画面"状态：下次呼出时粒子成形动画从空开始，不闪出旧内容。
-    // 若呼出动画正在播放，先取消收尾复原，再统一置空隐藏。
+    // 作废尚未开始的呼出（getSettings 等待中），取消进行中的呼出动画；
+    // 若关闭动画正在播放，也一并取消（取消不会触发 finish/隐藏，托盘已直接隐藏）。
+    summonSeq++;
+    if (closing) {
+      closing = false;
+      finished = false;
+      cancelDissolve();
+      cancelErode();
+    }
     cancelSummon();
     noteWindow.style.clipPath = "inset(0 0 100% 0)";
     noteWindow.style.boxShadow = "none";
@@ -2049,11 +2074,17 @@ export function mountNoteApp(noteId: string, preset = "") {
     // 非透明主题：按粒子强度/风格设置启动关闭动画（强度从设置读取，失败回退默认 50）
     getSettings()
       .then((s) => {
+        // getSettings 是异步的：等待期间若用户又呼出了（closing 已被复位/取消），
+        // 作废本次关闭，避免关闭动画与呼出动画同时改 clip-path 打架导致“卡住”。
+        if (!closing) return;
         const intensity = s.particle_intensity ?? 50;
         if (s.particle_mode === "erode") requestErodeDissolveClose(finish, intensity);
         else requestParticleDissolveClose(finish, intensity);
       })
-      .catch(() => requestParticleDissolveClose(finish));
+      .catch(() => {
+        if (!closing) return;
+        requestParticleDissolveClose(finish);
+      });
   }
 
   // 用户重新输入内容 → 若此前被删除过，视为重新创建，解除删除态

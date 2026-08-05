@@ -26,6 +26,15 @@
 //   自带看门狗，onDone 必定被调用。
 
 let animating = false;
+let cancelDissolveFn: (() => void) | null = null;
+
+/** 立即中止正在播放（或尚未开始）的粒子消散关闭动画：停止帧循环、复原页面，
+ *  且不调用 onDone（调用方不会因此去关闭/隐藏窗口）。用于“呼出打断关闭”等快速切换。 */
+export function cancelDissolve(): void {
+  const c = cancelDissolveFn;
+  cancelDissolveFn = null;
+  if (c) c();
+}
 
 /** 请求播放粒子消散关闭动画；onDone 在动画完全结束后调用（用于真正关闭窗口）。
  * @param particleDensity 粒子强度 0~100（默认 50≈4250 粒，最大 100≈8000 粒） */
@@ -37,13 +46,24 @@ export function requestParticleDissolveClose(onDone: () => void, particleDensity
   }
   animating = true;
   let done = false;
+  let aborted = false;
+  let stopPlay: (() => void) | null = null;
   const safeDone = () => {
     if (done) return;
     done = true;
     animating = false;
+    cancelDissolveFn = null;
     onDone();
   };
   const watchdog = window.setTimeout(safeDone, 3500);
+  cancelDissolveFn = () => {
+    if (aborted) return;
+    aborted = true;
+    window.clearTimeout(watchdog);
+    if (stopPlay) stopPlay();
+    done = true; // 阻止 onDone：finish() 不会被调用，窗口保持显示
+    animating = false;
+  };
 
   const bringToFront = async () => {
     try {
@@ -54,8 +74,9 @@ export function requestParticleDissolveClose(onDone: () => void, particleDensity
   };
 
   bringToFront().catch(() => {}).finally(() => {
+    if (aborted) return; // bringToFront 等待期间被取消：不再启动动画
     try {
-      playDissolve(root, () => { window.clearTimeout(watchdog); safeDone(); }, particleDensity);
+      stopPlay = playDissolve(root, () => { window.clearTimeout(watchdog); safeDone(); }, particleDensity);
     } catch (e) {
       console.error("粒子消散动画异常:", e);
       window.clearTimeout(watchdog);
@@ -83,7 +104,7 @@ const FLOW_AX2 = 0.017;
 const FLOW_BY2 = 0.008;
 const FLOW_W2 = 0.35;
 
-async function playDissolve(root: HTMLElement, onDone: () => void, particleDensity: number): Promise<void> {
+function playDissolve(root: HTMLElement, onDone: () => void, particleDensity: number): () => void {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -107,7 +128,7 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
   if (!ctx) {
     animating = false;
     onDone();
-    return;
+    return () => {};
   }
   ctx.scale(dpr, dpr);
 
@@ -446,4 +467,23 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
       frame(now); // 只推帧，不调度 rAF（rAF 恢复后自带继续）
     }
   }, 40);
+
+  // 返回“立即中止”句柄（cancelDissolve 调用）：停帧、移除覆盖层、复原页面样式。
+  // 注意：这里不复原为“空画面”（那是隐藏后的状态），而是复原为完整可见——因为
+  // 取消消散 = “呼出打断了关闭”，窗口保持显示。
+  return () => {
+    stopLoop();
+    try {
+      root.style.clipPath = "";
+      root.style.boxShadow = "";
+      root.style.opacity = "";
+    } catch {
+      /* ignore */
+    }
+    try {
+      canvas.remove();
+    } catch {
+      /* ignore */
+    }
+  };
 }

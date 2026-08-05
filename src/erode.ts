@@ -32,8 +32,20 @@ let materializing = false;
 let rafId = 0;
 let backupId = 0;
 
-/** 立即结束侵蚀动画并复原页面（关闭动画开始前调用，避免与呼出动画同时改 mask/透明度）。 */
+/** 当前侵蚀动画的“立即中止”句柄（由 runErode 注册；cancelErode 调用）。
+ *  中止 = 停帧 + 复原页面（保持可见，供“呼出打断关闭”等快速切换）。 */
+let cancelErodeFn: (() => void) | null = null;
+
+/** 立即中止侵蚀动画并复原页面（关闭动画开始前调用，避免与呼出动画同时改 mask/透明度；
+ *  呼出打断关闭时也调用——此时不触发 onDone，窗口保持显示）。 */
 export function cancelErode(): void {
+  const c = cancelErodeFn;
+  cancelErodeFn = null;
+  if (c) {
+    c();
+    return;
+  }
+  // 兜底：无注册句柄时（理论不会出现）直接复原
   if (!eroding && !materializing) return;
   eroding = false;
   materializing = false;
@@ -82,15 +94,26 @@ export function requestErodeDissolveClose(onDone: () => void, particleDensity = 
   }
   eroding = true;
   let done = false;
+  let aborted = false;
+  let stopRun: (() => void) | null = null;
   const safeDone = () => {
     if (done) return;
     done = true;
     eroding = false;
+    cancelErodeFn = null;
     onDone();
   };
   const watchdog = window.setTimeout(safeDone, 4000);
+  cancelErodeFn = () => {
+    if (aborted) return;
+    aborted = true;
+    window.clearTimeout(watchdog);
+    if (stopRun) stopRun();
+    done = true; // 阻止 onDone：finish() 不会被调用，窗口保持显示
+    eroding = false;
+  };
   try {
-    runErode(root, "dissolve", particleDensity, () => {
+    stopRun = runErode(root, "dissolve", particleDensity, () => {
       window.clearTimeout(watchdog);
       safeDone();
     });
@@ -105,12 +128,21 @@ export function requestErodeDissolveClose(onDone: () => void, particleDensity = 
 export function playErodeMaterialize(root: HTMLElement, particleDensity = 50): void {
   if (materializing) return;
   materializing = true;
+  let aborted = false;
+  let stopRun: (() => void) | null = null;
+  cancelErodeFn = () => {
+    if (aborted) return;
+    aborted = true;
+    if (stopRun) stopRun();
+    materializing = false;
+  };
   try {
-    runErode(root, "materialize", particleDensity, () => {
+    stopRun = runErode(root, "materialize", particleDensity, () => {
       /* materialize 收尾在 runErode 内自行复原，无需额外 onDone */
     });
   } catch (e) {
     console.error("侵蚀成形动画异常:", e);
+    cancelErodeFn = null;
     materializing = false;
     restoreRoot(root);
   }
@@ -169,7 +201,7 @@ function runErode(
   direction: "dissolve" | "materialize",
   particleDensity: number,
   onDone: () => void,
-): void {
+): () => void {
   const isDissolve = direction === "dissolve";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = window.innerWidth;
@@ -191,7 +223,7 @@ function runErode(
   const mctx = maskCanvas.getContext("2d");
   if (!mctx) {
     finishEarly();
-    return;
+    return () => {};
   }
   const img = mctx.createImageData(mw, mh);
   const px32 = new Uint32Array(img.data.buffer); // 以 32 位写入，仅改最高字节(alpha)
@@ -267,7 +299,7 @@ function runErode(
   if (!ctx) {
     canvas.remove();
     finishEarly();
-    return;
+    return () => {};
   }
   ctx.scale(dpr, dpr);
 
@@ -615,4 +647,16 @@ function runErode(
       onDone();
     }
   }, duration + 600);
+
+  // 返回“立即中止”句柄（cancelErode 调用）：停帧、移除覆盖层、复原页面样式。
+  // 中止 = 保持窗口可见（呼出打断关闭 / 关闭打断呼出都走这里）。
+  return () => {
+    stopLoop();
+    restoreRoot(root);
+    try {
+      canvas.remove();
+    } catch {
+      /* ignore */
+    }
+  };
 }
