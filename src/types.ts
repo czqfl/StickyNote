@@ -70,7 +70,7 @@ export interface Settings {
   transparent_opacity?: number;
   /** 粒子效果强度 0~100（关闭/呼出动画的粒子数量），默认 50 */
   particle_intensity?: number;
-  /** 粒子效果风格（仅控制呼出/成形效果；关闭已统一为侵蚀消散）：flame=火焰成形（默认）/ erode=侵蚀（羽化软边） */
+  /** 粒子效果风格：flame=火焰成形（呼出，默认）/ erode=侵蚀（呼出+关闭）/ particle=粒子光效（关闭·鸿蒙通知删除，呼出回退火焰） */
   particle_mode?: string;
 }
 

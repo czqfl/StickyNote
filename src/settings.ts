@@ -488,6 +488,7 @@ export async function openSettingsModal(): Promise<void> {
                 <select class="settings-select" id="set-particle-mode">
                   <option value="flame">火焰成形（呼出·波浪燃烧线）</option>
                   <option value="erode">侵蚀（呼出+关闭·烧纸/酸蚀·羽化软边）</option>
+                  <option value="particle">粒子光效（关闭·鸿蒙通知删除·冷光微粒）</option>
                 </select>
               </div>
             </div>
@@ -943,7 +944,7 @@ export async function openSettingsModal(): Promise<void> {
   particleIntensitySlider.addEventListener("input", () => {
     particleIntensityVal.textContent = particleIntensitySlider.value;
   });
-  // ---- 粒子风格（仅控制呼出/成形效果；关闭统一使用侵蚀消散）----
+  // ---- 粒子风格：flame=火焰呼出、erode=侵蚀呼出+关闭、particle=粒子光效关闭（呼出回退火焰）----
   const particleModeSel = overlay.querySelector("#set-particle-mode") as HTMLSelectElement;
   particleModeSel.value = draft.particle_mode || "flame";
 
