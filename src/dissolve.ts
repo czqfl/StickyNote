@@ -1,13 +1,13 @@
 // 便签关闭动画：鸿蒙式粒子消散（参考鸿蒙系统通知栏的删除粒子特效）
 // ----------------------------------------------------------------------------
-// 触发：关闭窗口（标题栏关闭按钮 / “全部关闭”全局快捷键）时，先播放本动画，结束后再真正关闭。
+// 触发：关闭窗口（标题栏关闭按钮 / "全部关闭"全局快捷键）时，先播放本动画，结束后再真正关闭。
 //
 // 效果：整张便签（内容 + 边框 + 底色，作为一个整体）像被火焰从上往下燃烧一样逐渐消散——
 // 燃烧线是一条左右起伏、随时间抖动的波浪形边缘（不是平直的横线），从顶部向底部推进；
 // 线所到之处立即化为细密的白色粒子，粒子从燃烧边缘升起，像纸灰/火星一样卷曲上飘
 // （多频率摇摆 + 上下扑闪 + 左右定向偏飘），边飘边淡出。
 // 从左到右：每一列的燃烧时机（波浪起伏）与上飘速度（左慢右快渐变）都不同，
-// 但整体保持“从上到下”的消散方向。消散很快（约 0.32s 烧完全页），粒子云再飘散
+// 但整体保持"从上到下"的消散方向。消散很快（约 0.32s 烧完全页），粒子云再飘散
 // 约 0.6s，粒子消散完窗口立即真正关闭，页面不复存在。
 //
 // 实现：
@@ -18,15 +18,15 @@
 // - 粒子按网格预铺满全页，激活时机 = 该列燃烧线扫到该行的时刻（波浪起伏导致
 //   左右列时机不同），上飘速度按列渐变（左慢右快）+ 随机；
 // - 粒子为预渲染的白色柔光细点精灵图，逐帧 drawImage 批量绘制；数量自适应
-//   （约每 6px 一个，上限 6000），粒子细小，观感是整页化为细腻的白色尘雾；
-// - 帧循环用 setTimeout(16ms) 驱动（按 performance.now() 计量）——便签窗口处于后台时
-//   rAF 会被系统/浏览器节流甚至暂停，计时器仍能持续推进，杜绝“卡住后无动画直接关闭”；
-// - 播放前把窗口聚焦到前台，进一步确保动画不被节流；自带看门狗，onDone 必定被调用。
+//   （强度 0~100 线性映射 500~8000 粒，最小间距 5px）；
+// - 粒子数据用 Float32Array（SoA），流场网格用 Float32Array，消除逐帧对象分配；
+// - 帧循环用 rAF 驱动 + 40ms 备用计时器兜底；age 由 dt 累积（与位移同步），
+//   帧慢时动画"慢放"而非"冻结后瞬间消失"；自带看门狗，onDone 必定被调用。
 
 let animating = false;
 
 /** 请求播放粒子消散关闭动画；onDone 在动画完全结束后调用（用于真正关闭窗口）。
- * @param particleDensity 粒子强度 0~100（默认 50≈5000 粒，最大 100≈9000 粒） */
+ * @param particleDensity 粒子强度 0~100（默认 50≈4250 粒，最大 100≈8000 粒） */
 export function requestParticleDissolveClose(onDone: () => void, particleDensity = 50): void {
   const root = document.querySelector(".note-window") as HTMLElement | null;
   if (!root || animating) {
@@ -41,7 +41,7 @@ export function requestParticleDissolveClose(onDone: () => void, particleDensity
     animating = false;
     onDone();
   };
-  const watchdog = window.setTimeout(safeDone, 2600);
+  const watchdog = window.setTimeout(safeDone, 3500);
 
   const bringToFront = async () => {
     try {
@@ -62,27 +62,16 @@ export function requestParticleDissolveClose(onDone: () => void, particleDensity
   });
 }
 
-interface Particle {
-  x: number;
-  y: number;
-  spawnT: number; // 激活时刻 ms（= 该列燃烧线扫到该行的时刻；之前不绘制）
-  life: number; // 寿命 ms（保证在动画结束前消亡）
-  riseMul: number; // 个体微差（0.9~1.1），保持火焰内细微个体差异又不破坏区域整体趋势
-  jitX: number; // 个体微抖动 px/s（远小于流场速度，不破坏方向一致性）
-  jitY: number;
-  phase: number; // 明灭相位
-  r: number; // 粒子半径 px（细小）
-  alpha: number; // 初始不透明度
-}
-
 // ---- 火焰式流场（Curl Noise 思想的轻量实现，核心算法）----
 // 经典做法（Bridson《Curl Noise for Procedural Fluid Flow》SIGGRAPH 2007 /
 // Shiffman《Nature of Code》flow field）：不让每个粒子各自随机飘，而是让所有粒子
 // 采样同一个平滑矢量场 v(x,y,t)，相邻区域粒子取到相近流速 → 区域方向一致（火焰般
 // 的整体趋势）；场随时间低频变化 → 整片粒子云如热气流般摇曳。
-// 此处用“可解析求导的正弦势场 ψ 求旋度”实现（散度为零，粒子不会堆积/坍缩）：
+// 此处用"可解析求导的正弦势场 ψ 求旋度"实现（散度为零，粒子不会堆积/坍缩）：
 //   vx = ∂ψ/∂y，vy = -∂ψ/∂x
-// 再叠加“热羽流”上飘速度（火焰热气向上升腾）。
+// 再叠加"热羽流"上飘速度（火焰热气向上升腾）。
+// 注意：flowAt 的计算已内联到帧循环的网格刷新中（避免逐格分配 {vx,vy} 对象），
+// 此处仅保留常量供内联代码引用。
 const FLOW_A1 = 3200;
 const FLOW_A2 = 1500;
 const FLOW_AX1 = 0.009;
@@ -91,21 +80,13 @@ const FLOW_W1 = 0.5;
 const FLOW_AX2 = 0.017;
 const FLOW_BY2 = 0.008;
 const FLOW_W2 = 0.35;
-function flowAt(x: number, y: number, t: number): { vx: number; vy: number } {
-  const c1 = Math.cos(FLOW_AX1 * x + FLOW_BY1 * y + t * FLOW_W1);
-  const c2 = Math.cos(FLOW_AX2 * x + FLOW_BY2 * y + t * FLOW_W2 + 1.3);
-  const vx = FLOW_A1 * FLOW_BY1 * c1 + FLOW_A2 * FLOW_BY2 * c2;
-  // 旋度项（可正可负，形成漩涡/回旋）+ 热羽流上飘（整体向上，略微按列起伏）
-  const vy = -(FLOW_A1 * FLOW_AX1 * c1 + FLOW_A2 * FLOW_AX2 * c2) - (62 + 14 * Math.sin(x * 0.006 + t * 0.6));
-  return { vx, vy };
-}
 
 async function playDissolve(root: HTMLElement, onDone: () => void, particleDensity: number): Promise<void> {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = window.innerWidth;
   const h = window.innerHeight;
 
-  // 全窗口覆盖层 canvas（置于最顶；逐帧重画“燃烧区底色 + 粒子”）
+  // 全窗口覆盖层 canvas（置于最顶；逐帧重画"燃烧区底色 + 粒子"）
   const canvas = document.createElement("canvas");
   canvas.className = "dissolve-canvas";
   canvas.width = Math.max(1, Math.round(w * dpr));
@@ -129,8 +110,8 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
   ctx.scale(dpr, dpr);
 
   // 便签的 box-shadow（内嵌描边环 + 底部内影）在 WebView2 里不会随 clip-path 被
-  // 裁剪，会整圈残留到最后——动画期间移除真实边框，改为在 Canvas 上按“燃烧线以下
-  // 区域”重新绘制（随燃烧线逐段消失），隐藏后由 cleanup 恢复。
+  // 裁剪，会整圈残留到最后——动画期间移除真实边框，改为在 Canvas 上按"燃烧线以下
+  // 区域"重新绘制（随燃烧线逐段消失），隐藏后由 cleanup 恢复。
   // 窗口不启用 DWM 圆角（见 main.rs 说明），因此动画期间没有圆角描边需要处理。
   root.style.boxShadow = "none";
   const noteRadius = parseFloat(getComputedStyle(root).borderRadius) || 14;
@@ -173,14 +154,28 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
 
   // ---- 粒子：网格预铺满整张便签（带抖动），激活时机 = 所在列燃烧线扫到该行 ----
   // 每列燃烧时机不同（波浪）、上飘速度按列渐变（左慢右快），但整体从上到下推进；
-  // 粒子数按强度 0~100 二次曲线缩放：50→约 7.5 万、100→约 30 万（上限 10×）。
-  // 实际数量还受最小间距约束（3px）：小窗口下由 spacing 决定实际网格数。
+  // 粒子数按强度 0~100 线性缩放：0→500、50→4250、100→8000（最小间距 5px）。
   const density = Math.max(0, Math.min(100, particleDensity)) / 100;
-  const MAX_COUNT = Math.round(500 + density * density * 299500);
-  const spacing = Math.max(3, Math.sqrt((w * h) / MAX_COUNT));
+  const MAX_COUNT = Math.round(500 + density * 7500);
+  const spacing = Math.max(5, Math.sqrt((w * h) / MAX_COUNT));
   const countX = Math.ceil(w / spacing);
   const countY = Math.ceil(h / spacing);
-  const particles: Particle[] = [];
+  const pcount = countX * countY;
+
+  // 粒子数据用 SoA（Structure of Arrays）typed arrays：
+  // 连续内存布局 → cache 友好，逐粒循环中无对象属性查找开销，无 GC 压力
+  const px = new Float32Array(pcount);
+  const py = new Float32Array(pcount);
+  const pspawnT = new Float32Array(pcount);
+  const plife = new Float32Array(pcount);
+  const priseMul = new Float32Array(pcount);
+  const pjitX = new Float32Array(pcount);
+  const pjitY = new Float32Array(pcount);
+  const pphase = new Float32Array(pcount);
+  const pr = new Float32Array(pcount);
+  const palpha = new Float32Array(pcount);
+
+  let pi = 0;
   for (let iy = 0; iy < countY; iy++) {
     const y = (iy + 0.5 + (Math.random() - 0.5) * 0.8) * spacing;
     for (let ix = 0; ix < countX; ix++) {
@@ -195,20 +190,19 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
         wipeDuration - 1,
         Math.max(0, t0 - (wave / h) * wipeDuration),
       );
-      particles.push({
-        x,
-        y,
-        spawnT,
-        // 寿命覆盖到动画结束前（约 8~10 成剩余时间），粒子与消散收尾同步结束，
-        // 消散完即关闭，不留空窗
-        life: (duration - spawnT) * (0.8 + Math.random() * 0.2),
-        riseMul: 0.9 + Math.random() * 0.2,
-        jitX: (Math.random() - 0.5) * 10,
-        jitY: (Math.random() - 0.5) * 10,
-        phase: Math.random() * Math.PI * 2,
-        r: 0.9 + Math.random() * 0.9,
-        alpha: 0.4 + Math.random() * 0.35,
-      });
+      px[pi] = x;
+      py[pi] = y;
+      pspawnT[pi] = spawnT;
+      // 寿命覆盖到动画结束前（约 8~10 成剩余时间），粒子与消散收尾同步结束，
+      // 消散完即关闭，不留空窗
+      plife[pi] = (duration - spawnT) * (0.8 + Math.random() * 0.2);
+      priseMul[pi] = 0.9 + Math.random() * 0.2;
+      pjitX[pi] = (Math.random() - 0.5) * 10;
+      pjitY[pi] = (Math.random() - 0.5) * 10;
+      pphase[pi] = Math.random() * Math.PI * 2;
+      pr[pi] = 0.9 + Math.random() * 0.9;
+      palpha[pi] = 0.4 + Math.random() * 0.35;
+      pi++;
     }
   }
 
@@ -229,7 +223,7 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
 
   const cleanup = async () => {
     stopLoop();
-    // 窗口隐藏后保持“空画面”（不复原 clip-path/box-shadow）：下次呼出时
+    // 窗口隐藏后保持"空画面"（不复原 clip-path/box-shadow）：下次呼出时
     // DWM 呈现的是空帧，粒子成形动画（summon.ts）从空开始，不会先闪出便签内容。
     // 样式复原由呼出动画收尾负责（playSummonMaterialize 结束 / cancelSummon）。
     try {
@@ -247,9 +241,10 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
     animating = false;
   };
 
-  // 粒子透明度分桶（复用数组，每帧只重置长度，避免逐帧分配造成 GC 停顿）
-  const ALPHA_BUCKETS = 24;
-  const buckets: number[][] = Array.from({ length: ALPHA_BUCKETS }, () => []);
+  // 粒子透明度分桶：预分配容量（避免逐帧 push 扩容），用 bucketLens 跟踪实际长度
+  const ALPHA_BUCKETS = 16;
+  const buckets: number[][] = Array.from({ length: ALPHA_BUCKETS }, () => new Array(pcount));
+  const bucketLens = new Int32Array(ALPHA_BUCKETS);
 
   // 预计算燃烧线 X 坐标与 X 字符串（每帧不变），逐帧只算 Y，减少分配与 toFixed
   const edgeX: number[] = new Array(EDGE_N + 1);
@@ -262,27 +257,31 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
   const edgeY: number[] = new Array(EDGE_N + 1);
   const pts: string[] = new Array(EDGE_N + 3); // 线点 + 左下 + 右下
 
-  // 流场网格（复用数组，每帧只重写值，避免逐帧分配）
-  const GX = Math.ceil(w / 40) + 1;
-  const GY = Math.ceil(h / 40) + 1;
-  const gvx: number[][] = new Array(GY);
-  const gvy: number[][] = new Array(GY);
-  for (let gy = 0; gy < GY; gy++) {
-    gvx[gy] = new Array(GX);
-    gvy[gy] = new Array(GX);
-  }
+  // 流场网格：flat Float32Array（连续内存，cache 友好，无逐行数组间接）
+  const CELL = 40;
+  const GX = Math.ceil(w / CELL) + 1;
+  const GY = Math.ceil(h / CELL) + 1;
+  const gvx = new Float32Array(GX * GY);
+  const gvy = new Float32Array(GX * GY);
+  const GXm2 = GX - 2;
+  const GYm2 = GY - 2;
+
+  // age 由 dt 累积（而非 now-start 真实时间）：帧慢时 dt 被限幅，age 同步变慢，
+  // 动画变为"慢放"而非"冻结后瞬间消失"——粒子始终与位移同步淡出
+  let ageAccum = 0;
 
   const frame = (now: number) => {
-    const age = now - start;
     // 按真实帧间隔积分（rAF 在 144Hz 下帧间隔约 7ms，固定 0.016 会整体加速）；
     // 限幅避免后台节流后的跳帧把粒子瞬间甩飞
     const dt = Math.min(0.05, Math.max(0.001, (now - prevNow) / 1000));
     prevNow = now;
+    ageAccum += dt * 1000;
+    const age = ageAccum;
 
     // ---- 波浪燃烧线采样 ----
     for (let i = 0; i <= EDGE_N; i++) edgeY[i] = edgeYAt(edgeX[i], age);
 
-    // 页面本体：clip-path 多边形保留“燃烧线以下”区域，线以上（含边框/圆角）被裁掉
+    // 页面本体：clip-path 多边形保留"燃烧线以下"区域，线以上（含边框/圆角）被裁掉
     for (let i = 0; i <= EDGE_N; i++) pts[i] = `${edgeXs[i]} ${edgeY[i].toFixed(1)}px`;
     pts[EDGE_N + 1] = `${w}px ${h}px`;
     pts[EDGE_N + 2] = `0px ${h}px`;
@@ -292,7 +291,7 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
     // 燃烧区（线以上）不画任何填充：透明窗口直接透出便签背后的桌面内容，
     // 白色粒子在桌面背景上飘散
 
-    // 边框环：只在“燃烧进行中”绘制（随燃烧线逐段消失）；燃烧完成即整体消失，
+    // 边框环：只在"燃烧进行中"绘制（随燃烧线逐段消失）；燃烧完成即整体消失，
     // 绝不在粒子飘散的尾巴阶段残留一圈悬浮边框
     if (age < wipeDuration) {
       ctx.save();
@@ -317,93 +316,105 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
       ctx.restore();
     }
 
-    // ---- 粒子：网格流场（预计算取代逐粒 cos）+ 分桶绘制 ----
-    // 在粗网格上采样流场（约 200 次 cos/帧），粒子经双线性插值取值，
-    // 彻底消除逐粒 cos（10000+ 次/帧），从 CPU 侧根除卡顿。
+    // ---- 粒子：网格流场（内联计算，零对象分配）+ 分桶绘制 ----
     const u = age / 1000;
-    // 刷新流场网格（复用数组，只写字面值）
+    // 刷新流场网格：直接内联 flowAt 公式，写入 flat Float32Array
     for (let gy = 0; gy < GY; gy++) {
-      const yy = gy * 40;
+      const yy = gy * CELL;
+      const rowBase = gy * GX;
       for (let gx = 0; gx < GX; gx++) {
-        const f = flowAt(gx * 40, yy, u);
-        gvx[gy][gx] = f.vx;
-        gvy[gy][gx] = f.vy;
+        const xx = gx * CELL;
+        const c1 = Math.cos(FLOW_AX1 * xx + FLOW_BY1 * yy + u * FLOW_W1);
+        const c2 = Math.cos(FLOW_AX2 * xx + FLOW_BY2 * yy + u * FLOW_W2 + 1.3);
+        const idx = rowBase + gx;
+        gvx[idx] = FLOW_A1 * FLOW_BY1 * c1 + FLOW_A2 * FLOW_BY2 * c2;
+        gvy[idx] = -(FLOW_A1 * FLOW_AX1 * c1 + FLOW_A2 * FLOW_AX2 * c2) - (62 + 14 * Math.sin(xx * 0.006 + u * 0.6));
       }
     }
-    // 双线性插值取流场
-    const sampleFlow = (px: number, py: number) => {
-      const gx = px / 40, gy = py / 40;
-      const ix = Math.min(Math.max(0, Math.floor(gx)), GX - 2);
-      const iy = Math.min(Math.max(0, Math.floor(gy)), GY - 2);
-      const fx = gx - ix, fy = gy - iy;
-      const v00 = gvx[iy][ix], v10 = gvx[iy][ix + 1], v01 = gvx[iy + 1][ix], v11 = gvx[iy + 1][ix + 1];
-      const vx = (1 - fx) * (1 - fy) * v00 + fx * (1 - fy) * v10 + (1 - fx) * fy * v01 + fx * fy * v11;
-      const w00 = gvy[iy][ix], w10 = gvy[iy][ix + 1], w01 = gvy[iy + 1][ix], w11 = gvy[iy + 1][ix + 1];
-      const vy = (1 - fx) * (1 - fy) * w00 + fx * (1 - fy) * w10 + (1 - fx) * fy * w01 + fx * fy * w11;
-      return { vx, vy };
-    };
 
-    for (const b of buckets) b.length = 0;
-    for (let i = 0; i < particles.length; i++) {
-      const p = particles[i];
-      if (age < p.spawnT) continue;
-      const pa = age - p.spawnT;
-      if (pa > p.life) continue;
-      const life01 = pa / p.life;
-      const f = sampleFlow(p.x, p.y);
-      p.x += (f.vx * p.riseMul + p.jitX) * dt;
-      p.y += (f.vy * p.riseMul + p.jitY) * dt;
-      const fadeIn = Math.min(1, pa / 60);
-      const fadeOut = Math.pow(1 - life01, 1.2);
-      const flicker = 0.82 + 0.18 * Math.sin(pa * 0.012 + p.phase);
-      const a = p.alpha * fadeIn * fadeOut * flicker;
+    // 粒子更新 + 分桶：内联双线性插值（无函数调用、无对象分配）
+    bucketLens.fill(0);
+    for (let i = 0; i < pcount; i++) {
+      const spawnT = pspawnT[i];
+      if (age < spawnT) continue;
+      const pa = age - spawnT;
+      const life = plife[i];
+      if (pa > life) continue;
+      const life01 = pa / life;
+
+      // 内联双线性插值取流场
+      const fgx = px[i] / CELL;
+      const fgy = py[i] / CELL;
+      let ix = fgx | 0;
+      let iy = fgy | 0;
+      if (ix < 0) ix = 0; else if (ix > GXm2) ix = GXm2;
+      if (iy < 0) iy = 0; else if (iy > GYm2) iy = GYm2;
+      const sfx = fgx - ix, sfy = fgy - iy;
+      const ifx = 1 - sfx, ify = 1 - sfy;
+      const idx = iy * GX + ix;
+      const vx = ifx * ify * gvx[idx] + sfx * ify * gvx[idx + 1] + ifx * sfy * gvx[idx + GX] + sfx * sfy * gvx[idx + GX + 1];
+      const vy = ifx * ify * gvy[idx] + sfx * ify * gvy[idx + 1] + ifx * sfy * gvy[idx + GX] + sfx * sfy * gvy[idx + GX + 1];
+
+      const rm = priseMul[i];
+      px[i] += (vx * rm + pjitX[i]) * dt;
+      py[i] += (vy * rm + pjitY[i]) * dt;
+
+      // fadeIn / fadeOut / flicker：用多项式替代 Math.pow，减少逐粒数学调用
+      const fadeIn = pa < 60 ? pa * 0.016666667 : 1; // /60
+      const fadeOut = (1 - life01) * (1 - life01);   // ≈ Math.pow(1-life01, 2)
+      const flicker = 0.82 + 0.18 * Math.sin(pa * 0.012 + pphase[i]);
+      const a = palpha[i] * fadeIn * fadeOut * flicker;
       if (a < 0.025) continue; // 近乎透明，跳过绘制
-      const bi = Math.min(ALPHA_BUCKETS - 1, (a * ALPHA_BUCKETS) | 0);
-      buckets[bi].push(i);
+      let bi = (a * ALPHA_BUCKETS) | 0;
+      if (bi >= ALPHA_BUCKETS) bi = ALPHA_BUCKETS - 1;
+      buckets[bi][bucketLens[bi]++] = i;
     }
+    // 分桶批量绘制（按透明度分组，减少 globalAlpha 状态切换）
     for (let bi = 0; bi < ALPHA_BUCKETS; bi++) {
-      const list = buckets[bi];
-      if (list.length === 0) continue;
+      const len = bucketLens[bi];
+      if (len === 0) continue;
       ctx.globalAlpha = (bi + 0.5) / ALPHA_BUCKETS;
-      for (let k = 0; k < list.length; k++) {
-        const p = particles[list[k]];
-        ctx.drawImage(sprite, p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
+      const list = buckets[bi];
+      for (let k = 0; k < len; k++) {
+        const i = list[k];
+        const r = pr[i];
+        ctx.drawImage(sprite, px[i] - r, py[i] - r, r * 2, r * 2);
       }
     }
     ctx.globalAlpha = 1;
 
-  if (age >= duration) {
-    // 收尾：先清空画面（页面已被裁剪、粒子已淡尽）——窗口以“空”状态隐藏，
-    // 避免隐藏瞬间对残留画面重新合成而产生“便签缩小一下”的残影
-    ctx.clearRect(0, 0, w, h);
-    stopLoop();
-    try {
-      onDone();
-    } finally {
-      // 关闭现为“隐藏”（异步 IPC）：延迟清理，待隐藏生效后再复原页面，
-      // 避免隐藏前一瞬闪回原内容
-      window.setTimeout(cleanup, 400);
+    if (age >= duration) {
+      // 收尾：先清空画面（页面已被裁剪、粒子已淡尽）——窗口以"空"状态隐藏，
+      // 避免隐藏瞬间对残留画面重新合成而产生"便签缩小一下"的残影
+      ctx.clearRect(0, 0, w, h);
+      stopLoop();
+      try {
+        onDone();
+      } finally {
+        // 关闭现为"隐藏"（异步 IPC）：延迟清理，待隐藏生效后再复原页面，
+        // 避免隐藏前一瞬闪回原内容
+        window.setTimeout(cleanup, 400);
+      }
+      return;
     }
-    return;
-  }
-};
+  };
 
-// 帧驱动：rAF 链每帧推进一次（对齐垂直同步）；rAF 停摆（>60ms 无新帧，如后台
-// 节流）时备用计时器直接推进一帧。注意：备用路径只推帧、不额外排程 rAF——
-// 否则帧耗时较长时 rAF 回调会层层堆积（每 40ms 多挂一个），渲染队列膨胀成
-// “粒子卡住不动”的死循环（时间仍在走，恢复后瞬间收尾“消失”）。
-const step = (now: number) => {
-  lastPaint = now;
-  frame(now);
-  if (!ended) rafId = requestAnimationFrame(step);
-};
-rafId = requestAnimationFrame(step);
-backupId = window.setInterval(() => {
-  if (ended) return;
-  const now = performance.now();
-  if (now - lastPaint > 60) {
+  // 帧驱动：rAF 链每帧推进一次（对齐垂直同步）；rAF 停摆（>60ms 无新帧，如后台
+  // 节流）时备用计时器直接推进一帧。注意：备用路径只推帧、不额外排程 rAF——
+  // 否则帧耗时较长时 rAF 回调会层层堆积（每 40ms 多挂一个），渲染队列膨胀成
+  // "粒子卡住不动"的死循环（时间仍在走，恢复后瞬间收尾"消失"）。
+  const step = (now: number) => {
     lastPaint = now;
-    frame(now); // 只推帧，不调度 rAF（rAF 恢复后自带继续）
-  }
-}, 40);
+    frame(now);
+    if (!ended) rafId = requestAnimationFrame(step);
+  };
+  rafId = requestAnimationFrame(step);
+  backupId = window.setInterval(() => {
+    if (ended) return;
+    const now = performance.now();
+    if (now - lastPaint > 60) {
+      lastPaint = now;
+      frame(now); // 只推帧，不调度 rAF（rAF 恢复后自带继续）
+    }
+  }, 40);
 }
