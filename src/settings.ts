@@ -4,6 +4,129 @@ import { applyPanelBackground } from "./panel-bg";
 import { listen } from "@tauri-apps/api/event";
 import type { Settings } from "./types";
 
+/* ===== 自定义下拉皮肤：用 div 包裹原生 <select>，使选项列表背景完全由本程序 CSS
+   变量控制——彻底摆脱 WebView2 原生 <option> 永远白底（其弹出列表跟随 Windows 系统
+   明暗主题）的局限。原生 <select> 仍保留在 DOM 中承担取值/change 事件，仅被视觉隐藏。 */
+let openCs: { close: () => void; wrap: HTMLElement } | null = null;
+let csDocBound = false;
+
+function ensureCsDocEvents() {
+  if (csDocBound) return;
+  csDocBound = true;
+  document.addEventListener("mousedown", (e) => {
+    if (openCs && !openCs.wrap.contains(e.target as Node)) openCs.close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && openCs) openCs.close();
+  });
+}
+
+function enhanceSelect(native: HTMLSelectElement) {
+  if (native.parentElement?.classList.contains("cs")) return; // 已增强
+  ensureCsDocEvents();
+
+  const wrap = document.createElement("div");
+  wrap.className = "cs";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "cs-trigger";
+  const label = document.createElement("span");
+  label.className = "cs-text";
+  const caret = document.createElement("span");
+  caret.className = "cs-caret";
+  caret.textContent = "▾";
+  trigger.append(label, caret);
+
+  const panel = document.createElement("div");
+  panel.className = "cs-panel";
+  const list = document.createElement("div");
+  list.className = "cs-list";
+  panel.appendChild(list);
+  wrap.append(trigger, panel);
+
+  native.parentNode?.insertBefore(wrap, native);
+  wrap.appendChild(native);
+  native.classList.add("cs-native");
+
+  function onAutoClose() {
+    api.close();
+  }
+
+  const api = {
+    wrap,
+    close() {
+      wrap.classList.remove("open");
+      window.removeEventListener("scroll", onAutoClose, true);
+      window.removeEventListener("resize", onAutoClose);
+      if (openCs === api) openCs = null;
+    },
+  };
+
+  function makeItem(o: HTMLOptionElement) {
+    const item = document.createElement("div");
+    item.className = "cs-item";
+    item.textContent = o.textContent;
+    item.dataset.value = o.value;
+    item.addEventListener("click", () => {
+      native.value = o.value;
+      native.dispatchEvent(new Event("change")); // 触发 renderKeys/syncMdCustomRow 等原生监听
+      api.close();
+      refresh();
+    });
+    return item;
+  }
+
+  function buildList() {
+    list.innerHTML = "";
+    const groups = native.querySelectorAll("optgroup");
+    if (groups.length) {
+      groups.forEach((g) => {
+        const gh = document.createElement("div");
+        gh.className = "cs-group";
+        gh.textContent = g.label;
+        list.appendChild(gh);
+        g.querySelectorAll("option").forEach((o) => list.appendChild(makeItem(o)));
+      });
+    } else {
+      native.querySelectorAll("option").forEach((o) => list.appendChild(makeItem(o)));
+    }
+  }
+
+  function refresh() {
+    const sel = native.options[native.selectedIndex];
+    label.textContent = sel ? sel.textContent : "";
+    list.querySelectorAll<HTMLElement>(".cs-item").forEach((it) => {
+      it.classList.toggle("selected", it.dataset.value === native.value);
+    });
+  }
+
+  function openPanel() {
+    if (openCs && openCs !== api) openCs.close();
+    buildList();
+    refresh();
+    wrap.classList.add("open");
+    // fixed 定位，脱离 .settings-modal 的 overflow 裁剪；靠近窗口底边时向上弹出
+    const r = trigger.getBoundingClientRect();
+    panel.style.width = r.width + "px";
+    panel.style.left = r.left + "px";
+    const ph = panel.offsetHeight;
+    const below = window.innerHeight - r.bottom - 4;
+    panel.style.top = ph <= below ? r.bottom + 4 + "px" : Math.max(4, r.top - 4 - ph) + "px";
+    panel.scrollTop = 0;
+    openCs = api;
+    window.addEventListener("scroll", onAutoClose, true);
+    window.addEventListener("resize", onAutoClose);
+  }
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (wrap.classList.contains("open")) api.close();
+    else openPanel();
+  });
+
+  refresh();
+}
+
 export const SHORTCUT_ACTIONS: { key: string; label: string }[] = [
   { key: "fg_color", label: "字体颜色" },
   { key: "bg_color", label: "字体背景色" },
@@ -661,6 +784,13 @@ export async function openSettingsModal(): Promise<void> {
     themeSel.appendChild(og);
   });
   themeSel.value = draft.theme || "light";
+
+  // 用自定义皮肤包裹原生下拉，使选项列表背景跟随主题（原生 <option> 在 WebView2 下永远白底）
+  enhanceSelect(providerSel);
+  enhanceSelect(targetCjkSel);
+  enhanceSelect(targetLatinSel);
+  enhanceSelect(mdThemeSel);
+  enhanceSelect(themeSel);
 
   // 透明主题实时预览：切到/切离透明时即时启停 DWM 实时模糊（零延迟）。
   // “背景不透明度”0% = 关闭 DWM 效果完全透明；>0% = 系统亚克力实时模糊 +

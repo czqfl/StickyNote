@@ -1815,7 +1815,7 @@ body,
   /* 透明主题下跟随“背景不透明度”半透明（--trans-opacity 由滑块实时写入），
      拖动滑块时设置面板本身就能看到深浅变化；非透明主题未定义变量 → 不透明。 */
   background: color-mix(in srgb, var(--bg) calc(var(--trans-opacity, 100) * 1%), transparent);
-  border-radius: 12px;
+  border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
   display: flex;
   flex-direction: column;
@@ -1860,7 +1860,7 @@ body,
   font-size: 12.5px;
   font-family: inherit;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: 9px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1916,7 +1916,7 @@ body,
 .settings-section {
   background: color-mix(in srgb, var(--bg-bar) 42%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 10px;
+  border-radius: 14px;
   padding: 12px;
   margin-bottom: 12px;
 }
@@ -1964,7 +1964,7 @@ body,
   color: var(--text-sub);
   background: var(--bg-bar);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 9px;
   padding: 3px 8px;
   min-width: 92px;
   text-align: center;
@@ -1980,7 +1980,7 @@ body,
 .shortcut-confirm {
   font-size: 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 9px;
   background: var(--bg);
   color: var(--text-sub);
   cursor: pointer;
@@ -2055,7 +2055,7 @@ body,
   flex: 1;
   height: 28px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 9px;
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
@@ -2068,6 +2068,105 @@ body,
 .settings-input:focus,
 .settings-select:focus {
   border-color: var(--accent);
+}
+
+/* ===== 自定义下拉皮肤（替代原生 <select>，选项背景跟随主题）===== */
+.cs {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+/* 原生 select 保留在 DOM 承担取值/事件，仅视觉隐藏 */
+.cs-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  left: 0;
+  top: 0;
+}
+.cs-trigger {
+  width: 100%;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-bar) 55%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s ease, background .15s ease;
+}
+.cs-trigger:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.cs.open .cs-trigger,
+.cs-trigger:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+.cs-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-caret {
+  flex: none;
+  color: var(--text-sub);
+  font-size: 10px;
+  transition: transform .15s ease;
+}
+.cs.open .cs-caret {
+  transform: rotate(180deg);
+}
+.cs-panel {
+  position: fixed;
+  z-index: 3000;
+  max-height: 240px;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--bg-bar) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 11px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+  padding: 4px;
+  display: none;
+}
+.cs.open .cs-panel {
+  display: block;
+}
+.cs-group {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-hint);
+  padding: 7px 9px 3px;
+}
+.cs-item {
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cs-item:hover {
+  background: var(--bg-hover);
+}
+.cs-item.selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .settings-footer {
@@ -2093,7 +2192,7 @@ body,
 .btn-primary {
   font-size: 12px;
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: 9px;
   background: var(--accent);
   color: #fff;
   cursor: pointer;
