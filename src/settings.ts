@@ -227,6 +227,7 @@ function defaultSettings(): Settings {
     glass_blur: 55,
     transparent_opacity: 65,
     particle_intensity: 50,
+    particle_mode: "dissolve",
   } as Settings;
 }
 
@@ -349,6 +350,13 @@ export async function openSettingsModal(): Promise<void> {
                 <label class="settings-label">粒子强度</label>
                 <input type="range" id="particle-intensity" min="0" max="100" step="1" value="50">
                 <span class="settings-val" id="particle-intensity-val">50</span>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">粒子风格</label>
+                <select class="settings-select" id="particle-mode">
+                  <option value="dissolve">火焰消散（上→下）</option>
+                  <option value="wind">侧风吹散（左/右）</option>
+                </select>
               </div>
             </div>
           </section>
@@ -750,6 +758,8 @@ export async function openSettingsModal(): Promise<void> {
   particleIntensitySlider.addEventListener("input", () => {
     particleIntensityVal.textContent = particleIntensitySlider.value;
   });
+  const particleModeSel = overlay.querySelector("#particle-mode") as HTMLSelectElement;
+  particleModeSel.value = draft.particle_mode === "wind" ? "wind" : "dissolve";
 
   // ---- 全局默认背景图 ----
   const bgUploadBtn = overlay.querySelector("#bg-upload") as HTMLButtonElement;
@@ -1036,6 +1046,7 @@ export async function openSettingsModal(): Promise<void> {
     draft.theme = themeSel.value;
     draft.edge_snap = edgeSnapChk.checked;
     draft.particle_intensity = Number(particleIntensitySlider.value);
+    draft.particle_mode = particleModeSel.value === "wind" ? "wind" : "dissolve";
     draft.llm_base_url = llmBase.value.trim();
     draft.llm_api_key = llmKey.value.trim();
     draft.llm_model = llmModel.value.trim();

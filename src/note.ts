@@ -22,6 +22,7 @@ import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
 import { requestParticleDissolveClose } from "./dissolve";
 import { playSummonMaterialize, cancelSummon } from "./summon";
+import { requestParticleWindClose, playWindMaterialize, cancelWind } from "./wind";
 import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
 import { applyPanelBackground } from "./panel-bg";
 import {
@@ -783,11 +784,13 @@ export function mountNoteApp(noteId: string, preset = "") {
         }
         return;
       }
-      // 非透明主题：按粒子强度设置启动呼出动画
+      // 非透明主题：按粒子强度/风格设置启动呼出动画
       getSettings()
-        .then((s) =>
-          playSummonMaterialize(noteWindow, s.particle_intensity ?? 50),
-        )
+        .then((s) => {
+          const intensity = s.particle_intensity ?? 50;
+          if (s.particle_mode === "wind") playWindMaterialize(noteWindow, intensity);
+          else playSummonMaterialize(noteWindow, intensity);
+        })
         .catch(() => playSummonMaterialize(noteWindow));
     }
   });
@@ -1938,6 +1941,7 @@ export function mountNoteApp(noteId: string, preset = "") {
     // 隐藏前先进入"空画面"状态：下次呼出时粒子成形动画从空开始，不闪出旧内容。
     // 若呼出动画正在播放，先取消收尾复原，再统一置空隐藏。
     cancelSummon();
+    cancelWind();
     noteWindow.style.clipPath = "inset(0 0 100% 0)";
     noteWindow.style.boxShadow = "none";
     wasHidden = true;
@@ -1960,6 +1964,7 @@ export function mountNoteApp(noteId: string, preset = "") {
     if (closing) return;
     // 呼出动画若在播放，先立即收尾复原页面，避免两个动画同时改 clip-path
     cancelSummon();
+    cancelWind();
     closing = true;
     finished = false;
     const finish = () => {
@@ -1989,11 +1994,13 @@ export function mountNoteApp(noteId: string, preset = "") {
       finish();
       return;
     }
-    // 非透明主题：按粒子强度设置启动关闭动画（强度从设置读取，失败回退默认 50）
+    // 非透明主题：按粒子强度/风格设置启动关闭动画（强度从设置读取，失败回退默认 50）
     getSettings()
-      .then((s) =>
-        requestParticleDissolveClose(finish, s.particle_intensity ?? 50),
-      )
+      .then((s) => {
+        const intensity = s.particle_intensity ?? 50;
+        if (s.particle_mode === "wind") requestParticleWindClose(finish, intensity);
+        else requestParticleDissolveClose(finish, intensity);
+      })
       .catch(() => requestParticleDissolveClose(finish));
   }
 

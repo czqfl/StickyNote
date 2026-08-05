@@ -70,6 +70,8 @@ export interface Settings {
   transparent_opacity?: number;
   /** 粒子效果强度 0~100（关闭/呼出动画的粒子数量），默认 50 */
   particle_intensity?: number;
+  /** 粒子动画风格：dissolve（火焰消散，上→下）/ wind（侧风吹散，左/右随机），默认 dissolve */
+  particle_mode?: string;
 }
 
 export interface TranslateResult {
