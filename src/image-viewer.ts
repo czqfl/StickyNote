@@ -53,22 +53,14 @@ export async function mountImageViewer(): Promise<void> {
       <div class="iv-stage"><img class="iv-img" alt="图片预览"></div>
       <button class="iv-nav iv-prev" type="button" title="上一张">‹</button>
       <button class="iv-nav iv-next" type="button" title="下一张">›</button>
-      <button class="iv-close" type="button" title="关闭">✕</button>
       <div class="iv-count"></div>
     </div>`;
 
   getEl<HTMLButtonElement>(".iv-prev").onclick = () => step(-1);
   getEl<HTMLButtonElement>(".iv-next").onclick = () => step(1);
-  getEl<HTMLButtonElement>(".iv-close").onclick = () => closeViewer();
-
-  // 点击空白区域（遮罩/舞台）关闭
-  getEl<HTMLElement>(".iv-root").addEventListener("click", (e) => {
-    if (e.target === getEl(".iv-root") || e.target === getEl(".iv-stage")) closeViewer();
-  });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeViewer();
-    else if (e.key === "ArrowLeft") step(-1);
+    if (e.key === "ArrowLeft") step(-1);
     else if (e.key === "ArrowRight") step(1);
   });
 
