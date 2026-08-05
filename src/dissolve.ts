@@ -4,7 +4,7 @@
 //
 // 效果：整张便签（内容 + 边框 + 底色，作为一个整体）像被火焰从上往下燃烧一样逐渐消散——
 // 燃烧线是一条左右起伏、随时间抖动的波浪形边缘（不是平直的横线），从顶部向底部推进；
-// 线所到之处立即化为细密的白色粒子，粒子从燃烧边缘升起，像纸灰/火星一样卷曲上飘
+// 线所到之处立即化为细密的火焰色余烬，余烬从燃烧边缘升起，像纸灰/火星一样卷曲上飘
 // （多频率摇摆 + 上下扑闪 + 左右定向偏飘），边飘边淡出。
 // 从左到右：每一列的燃烧时机（波浪起伏）与上飘速度（左慢右快渐变）都不同，
 // 但整体保持"从上到下"的消散方向。消散很快（约 0.32s 烧完全页），粒子云再飘散
@@ -14,10 +14,11 @@
 // - 页面本体用 clip-path 多边形逐帧裁剪：多边形上边 = 波浪燃烧线（每帧按正弦叠加
 //   两档频率采样 26 个点），线以上被裁掉——边框/圆角/内部线条随燃烧线一同消失；
 // - 燃烧区（线以上）在 Canvas 覆盖层上不画任何填充：透明窗口直接透出便签背后的
-//   桌面内容，白色粒子在真实桌面上飘散；页面裁剪 + 粒子覆盖即完整消散；
+//   桌面内容，火焰色余烬在真实桌面上飘散；页面裁剪 + 粒子覆盖即完整消散；
 // - 粒子按网格预铺满全页，激活时机 = 该列燃烧线扫到该行的时刻（波浪起伏导致
 //   左右列时机不同），上飘速度按列渐变（左慢右快）+ 随机；
-// - 粒子为预渲染的白色柔光细点精灵图，逐帧 drawImage 批量绘制；数量自适应
+// - 粒子为预渲染的火焰色余烬精灵（按温度分档：白热→黄→橙→暗红），逐帧 drawImage
+//   批量绘制；additive 混合让重叠余烬叠亮成白热核心（火焰最典型特征）；数量自适应
 //   （强度 0~100 线性映射 500~8000 粒，最小间距 5px）；
 // - 粒子数据用 Float32Array（SoA），流场网格用 Float32Array，消除逐帧对象分配；
 // - 帧循环用 rAF 驱动 + 40ms 备用计时器兜底；时间线 age 走真实墙钟（now-start），
@@ -115,24 +116,37 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
   // 区域"重新绘制（随燃烧线逐段消失），隐藏后由 cleanup 恢复。
   // 窗口不启用 DWM 圆角（见 main.rs 说明），因此动画期间没有圆角描边需要处理。
   root.style.boxShadow = "none";
-  const noteRadius = parseFloat(getComputedStyle(root).borderRadius) || 14;
 
-  // 预渲染白色柔光细点精灵（径向渐变：中心白 → 边缘快速透明）
+  // 预渲染火焰色余烬精灵：按温度分档（白热→黄→橙→暗红），径向渐变中心实、边缘透。
+  // 真实火焰：锋面刚升起的余烬最热（白/黄），上飘过程中冷却为橙→暗红。
   const SS = 8;  // 缩小精灵体积（原 12），降低逐帧填充率
-  const sprite = document.createElement("canvas");
-  sprite.width = SS;
-  sprite.height = SS;
-  {
-    const sctx = sprite.getContext("2d");
-    if (sctx) {
-      const g = sctx.createRadialGradient(SS / 2, SS / 2, 0, SS / 2, SS / 2, SS / 2);
-      g.addColorStop(0, "rgba(255,255,255,1)");
-      g.addColorStop(0.3, "rgba(255,255,255,0.65)");
-      g.addColorStop(1, "rgba(255,255,255,0)");
-      sctx.fillStyle = g;
-      sctx.fillRect(0, 0, SS, SS);
+  const FIRE_RGB: number[][] = [
+    [255, 246, 214], // 0 白热核心
+    [255, 222, 130], // 1 黄
+    [255, 150, 52],  // 2 橙
+    [232, 92, 28],   // 3 深橙
+    [168, 40, 14],   // 4 暗红余烬
+  ];
+  const FIRE_N = FIRE_RGB.length;
+  function makeFireSprite(rgb: number[]): HTMLCanvasElement {
+    const c = document.createElement("canvas");
+    c.width = SS; c.height = SS;
+    const s = c.getContext("2d");
+    if (s) {
+      const g = s.createRadialGradient(SS / 2, SS / 2, 0, SS / 2, SS / 2, SS / 2);
+      g.addColorStop(0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},1)`);
+      g.addColorStop(0.35, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.6)`);
+      g.addColorStop(1, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0)`);
+      s.fillStyle = g;
+      s.fillRect(0, 0, SS, SS);
     }
+    return c;
   }
+  const fireSprites: HTMLCanvasElement[] = FIRE_RGB.map(makeFireSprite);
+  // 燃烧/成形前沿的纵向暖色渐变（上黄下橙），只创建一次避免逐帧分配
+  const fireEdgeGrad = ctx.createLinearGradient(0, 0, 0, h);
+  fireEdgeGrad.addColorStop(0, "rgba(255,215,130,0.95)");
+  fireEdgeGrad.addColorStop(1, "rgba(255,105,30,0.8)");
 
   // ---- 燃烧线：波浪形边缘，从顶部向底部推进 ----
   const wipeDuration = 320; // 烧完全页的用时 ms（快）
@@ -299,28 +313,22 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
 
     ctx.clearRect(0, 0, w, h);
     // 燃烧区（线以上）不画任何填充：透明窗口直接透出便签背后的桌面内容，
-    // 白色粒子在桌面背景上飘散
+    // 火焰色余烬在桌面背景上飘散
 
-    // 边框环：只在"燃烧进行中"绘制（随燃烧线逐段消失）；燃烧完成即整体消失，
-    // 绝不在粒子飘散的尾巴阶段残留一圈悬浮边框
+    // 燃烧前沿：沿波浪线描一条发光暖色火边（替代原极淡黑描边），
+    // 让"裁剪硬边"看起来像真实燃烧锋面而非被一刀切掉；additive + 阴影模糊形成热辉光
     if (age < wipeDuration) {
       ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.shadowColor = "rgba(255,140,40,0.95)";
+      ctx.shadowBlur = 14;
+      ctx.strokeStyle = fireEdgeGrad;
+      ctx.lineWidth = 2.4;
+      ctx.lineJoin = "round";
       ctx.beginPath();
       for (let i = 0; i <= EDGE_N; i++) {
         if (i === 0) ctx.moveTo(edgeX[i], edgeY[i]);
         else ctx.lineTo(edgeX[i], edgeY[i]);
-      }
-      ctx.lineTo(w, h);
-      ctx.lineTo(0, h);
-      ctx.closePath();
-      ctx.clip();
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.05)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      if (typeof ctx.roundRect === "function") {
-        ctx.roundRect(0.5, 0.5, w - 1, h - 1, noteRadius);
-      } else {
-        ctx.rect(0.5, 0.5, w - 1, h - 1);
       }
       ctx.stroke();
       ctx.restore();
@@ -383,7 +391,10 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
       if (bi >= ALPHA_BUCKETS) bi = ALPHA_BUCKETS - 1;
       buckets[bi][bucketLens[bi]++] = i;
     }
-    // 分桶批量绘制（按透明度分组，减少 globalAlpha 状态切换）
+    // 分桶批量绘制（按透明度分组，减少 globalAlpha 状态切换）。
+    // additive 混合：重叠余烬自然叠亮成白热核心，是火焰最典型的特征；
+    // 按 life01 选温度档——刚升起的余烬最热（白/黄），上飘冷却为橙→暗红。
+    ctx.globalCompositeOperation = "lighter";
     for (let bi = 0; bi < ALPHA_BUCKETS; bi++) {
       const len = bucketLens[bi];
       if (len === 0) continue;
@@ -392,10 +403,14 @@ async function playDissolve(root: HTMLElement, onDone: () => void, particleDensi
       for (let k = 0; k < len; k++) {
         const i = list[k];
         const r = pr[i];
-        ctx.drawImage(sprite, px[i] - r, py[i] - r, r * 2, r * 2);
+        const life01 = plife[i] > 0 ? (age - pspawnT[i]) / plife[i] : 1;
+        let fi = (life01 * FIRE_N) | 0;
+        if (fi >= FIRE_N) fi = FIRE_N - 1;
+        ctx.drawImage(fireSprites[fi], px[i] - r, py[i] - r, r * 2, r * 2);
       }
     }
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
 
     if (age >= duration) {
       // 收尾：先清空画面（页面已被裁剪、粒子已淡尽）——窗口以"空"状态隐藏，

@@ -3,7 +3,7 @@
 // 触发：便签窗口被"呼出"（托盘 / 全局快捷键 / 单实例唤起 / 历史打开）时播放，替代瞬现。
 // 效果：整张便签从下到上"粒子成形"——成形线（左右起伏的波浪形边缘）从窗口底边
 // 向顶边推进，线以下的便签区域随线上移逐渐显示（内容/边框/底色整体生成），
-// 线以上的空白区里细密白色粒子从成形边缘升起、上飘淡出；成形线扫到顶边后便签
+// 线以上的空白区里细密火焰色余烬从成形边缘升起、上飘淡出；成形线扫到顶边后便签
 // 完整呈现，粒子云再飘散收尾。时长与关闭动画一致（约 0.32s 成形 + 0.6s 粒子）。
 //
 // 实现：与 dissolve.ts 完全镜像——
@@ -89,24 +89,37 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
   // 确保无论上次状态如何，动画都从空画面开始、不闪出旧内容。
   root.style.boxShadow = "none";
   root.style.clipPath = "inset(0 0 100% 0)";
-  const noteRadius = parseFloat(getComputedStyle(root).borderRadius) || 14;
 
-  // 预渲染白色柔光细点精灵（径向渐变：中心白 → 边缘快速透明），与关闭动画同一套
+  // 预渲染火焰色余烬精灵：按温度分档（白热→黄→橙→暗红），径向渐变中心实、边缘透。
+  // 真实火焰：锋面刚升起的余烬最热（白/黄），上飘过程中冷却为橙→暗红。
   const SS = 8;  // 缩小精灵体积（原 12），降低逐帧填充率
-  const sprite = document.createElement("canvas");
-  sprite.width = SS;
-  sprite.height = SS;
-  {
-    const sctx = sprite.getContext("2d");
-    if (sctx) {
-      const g = sctx.createRadialGradient(SS / 2, SS / 2, 0, SS / 2, SS / 2, SS / 2);
-      g.addColorStop(0, "rgba(255,255,255,1)");
-      g.addColorStop(0.3, "rgba(255,255,255,0.65)");
-      g.addColorStop(1, "rgba(255,255,255,0)");
-      sctx.fillStyle = g;
-      sctx.fillRect(0, 0, SS, SS);
+  const FIRE_RGB: number[][] = [
+    [255, 246, 214], // 0 白热核心
+    [255, 222, 130], // 1 黄
+    [255, 150, 52],  // 2 橙
+    [232, 92, 28],   // 3 深橙
+    [168, 40, 14],   // 4 暗红余烬
+  ];
+  const FIRE_N = FIRE_RGB.length;
+  function makeFireSprite(rgb: number[]): HTMLCanvasElement {
+    const c = document.createElement("canvas");
+    c.width = SS; c.height = SS;
+    const s = c.getContext("2d");
+    if (s) {
+      const g = s.createRadialGradient(SS / 2, SS / 2, 0, SS / 2, SS / 2, SS / 2);
+      g.addColorStop(0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},1)`);
+      g.addColorStop(0.35, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.6)`);
+      g.addColorStop(1, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0)`);
+      s.fillStyle = g;
+      s.fillRect(0, 0, SS, SS);
     }
+    return c;
   }
+  const fireSprites: HTMLCanvasElement[] = FIRE_RGB.map(makeFireSprite);
+  // 燃烧/成形前沿的纵向暖色渐变（上黄下橙），只创建一次避免逐帧分配
+  const fireEdgeGrad = ctx.createLinearGradient(0, 0, 0, h);
+  fireEdgeGrad.addColorStop(0, "rgba(255,215,130,0.95)");
+  fireEdgeGrad.addColorStop(1, "rgba(255,105,30,0.8)");
 
   // ---- 成形线：波浪形边缘，从窗口底边向顶边推进 ----
   const wipeDuration = 320; // 成形完成用时 ms（与关闭动画一致）
@@ -276,28 +289,22 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
 
     ctx.clearRect(0, 0, w, h);
     // 未成形区（线以上）不画任何填充：透明窗口直接透出便签背后的桌面内容，
-    // 白色粒子在桌面背景上飘散
+    // 火焰色余烬在桌面背景上飘散
 
-    // 边框环：只在"成形进行中"绘制（随成形线逐段出现）；成形完成即整体出现，
-    // 绝不在粒子收尾阶段悬浮一圈边框
+    // 成形前沿：沿波浪线描一条发光暖色火边（替代原极淡黑描边），
+    // 让"裁剪硬边"看起来像真实燃烧锋面而非被一刀切掉；additive + 阴影模糊形成热辉光
     if (age < wipeDuration) {
       ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.shadowColor = "rgba(255,140,40,0.95)";
+      ctx.shadowBlur = 14;
+      ctx.strokeStyle = fireEdgeGrad;
+      ctx.lineWidth = 2.4;
+      ctx.lineJoin = "round";
       ctx.beginPath();
       for (let i = 0; i <= EDGE_N; i++) {
         if (i === 0) ctx.moveTo(edgeX[i], edgeY[i]);
         else ctx.lineTo(edgeX[i], edgeY[i]);
-      }
-      ctx.lineTo(w, h);
-      ctx.lineTo(0, h);
-      ctx.closePath();
-      ctx.clip();
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.05)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      if (typeof ctx.roundRect === "function") {
-        ctx.roundRect(0.5, 0.5, w - 1, h - 1, noteRadius);
-      } else {
-        ctx.rect(0.5, 0.5, w - 1, h - 1);
       }
       ctx.stroke();
       ctx.restore();
@@ -360,7 +367,10 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
       if (bi >= ALPHA_BUCKETS) bi = ALPHA_BUCKETS - 1;
       buckets[bi][bucketLens[bi]++] = i;
     }
-    // 分桶批量绘制（按透明度分组，减少 globalAlpha 状态切换）
+    // 分桶批量绘制（按透明度分组，减少 globalAlpha 状态切换）。
+    // additive 混合：重叠余烬自然叠亮成白热核心，是火焰最典型的特征；
+    // 按 life01 选温度档——刚升起的余烬最热（白/黄），上飘冷却为橙→暗红。
+    ctx.globalCompositeOperation = "lighter";
     for (let bi = 0; bi < ALPHA_BUCKETS; bi++) {
       const len = bucketLens[bi];
       if (len === 0) continue;
@@ -369,10 +379,14 @@ export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): 
       for (let k = 0; k < len; k++) {
         const i = list[k];
         const r = pr[i];
-        ctx.drawImage(sprite, px[i] - r, py[i] - r, r * 2, r * 2);
+        const life01 = plife[i] > 0 ? (age - pspawnT[i]) / plife[i] : 1;
+        let fi = (life01 * FIRE_N) | 0;
+        if (fi >= FIRE_N) fi = FIRE_N - 1;
+        ctx.drawImage(fireSprites[fi], px[i] - r, py[i] - r, r * 2, r * 2);
       }
     }
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
 
     if (age >= duration) {
       // 收尾：先清空画面（页面已完整成形）——直接复原样式并移除覆盖层
