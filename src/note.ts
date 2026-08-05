@@ -2039,9 +2039,13 @@ export function mountNoteApp(noteId: string, preset = "") {
   let acrylicOffPending = false;
   function requestAnimatedClose() {
     if (closing) return;
-    // 呼出动画若在播放，先立即收尾复原页面，避免两个动画同时改 clip-path / mask
+    // 呼出/成形动画若在播放，先立即收尾复原页面，避免两个动画同时改 clip-path / mask；
+    // 同时作废任何“等待 getSettings 的待播放呼出”，确保关闭能干净接管——
+    // 与“关闭被呼出打断”完全对称：双向都随时可打断对方。
     cancelSummon();
     cancelErode();
+    cancelDissolve(); // 防御：清掉任何残留的关闭动画，避免叠加
+    summonSeq++; // 作废进行中的呼出（其 getSettings().then 会检查 seq 后跳过）
     closing = true;
     finished = false;
     const finish = () => {

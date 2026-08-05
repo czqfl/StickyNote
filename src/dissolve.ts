@@ -65,24 +65,24 @@ export function requestParticleDissolveClose(onDone: () => void, particleDensity
     animating = false;
   };
 
-  const bringToFront = async () => {
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const win = getCurrentWindow();
-      try { await win.setFocus(); } catch { /* ignore */ }
-    } catch { /* ignore */ }
-  };
+  // 同步立即启动消散动画：取消呼出/成形动画后，窗口若还要等“窗口聚焦”异步完成才
+  // 开始消散，会出现一段“整窗满显、无任何动画”的空窗，看起来像呼出动画没被打断 /
+  // 动画直接消失。聚焦仅是增强（让动画期间窗口在顶层），改为后台非阻塞执行，
+  // 绝不阻塞消散首帧——取消与启动同属同步代码段，cancelDissolve() 仍能正确中止。
+  try {
+    stopPlay = playDissolve(root, () => { window.clearTimeout(watchdog); safeDone(); }, particleDensity);
+  } catch (e) {
+    console.error("粒子消散动画异常:", e);
+    window.clearTimeout(watchdog);
+    safeDone();
+  }
 
-  bringToFront().catch(() => {}).finally(() => {
-    if (aborted) return; // bringToFront 等待期间被取消：不再启动动画
-    try {
-      stopPlay = playDissolve(root, () => { window.clearTimeout(watchdog); safeDone(); }, particleDensity);
-    } catch (e) {
-      console.error("粒子消散动画异常:", e);
-      window.clearTimeout(watchdog);
-      safeDone();
-    }
-  });
+  // 后台置顶（失败不影响动画）
+  void import("@tauri-apps/api/window")
+    .then(({ getCurrentWindow }) => {
+      try { getCurrentWindow().setFocus(); } catch { /* ignore */ }
+    })
+    .catch(() => { /* ignore */ });
 }
 
 // ---- 火焰式流场（Curl Noise 思想的轻量实现，核心算法）----
