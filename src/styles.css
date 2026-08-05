@@ -1990,6 +1990,10 @@ body,
 }
 .settings-pane.active {
   display: block;
+  margin-bottom: 28px;
+}
+.settings-pane.active:last-child {
+  margin-bottom: 0;
 }
 
 .settings-header {
@@ -2024,7 +2028,6 @@ body,
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 14px;
   padding: 16px;
-  margin-bottom: 20px;
 }
 
 .settings-section:last-child {
