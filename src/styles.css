@@ -1822,15 +1822,21 @@ body,
   overflow: hidden;
 }
 
-/* 独立窗口模式：面板拉伸占满窗口，去掉圆角与外发光；
-   背景透明，让 .settings-modal.has-bg::before 的背景图+模糊透出来。 */
+/* 独立窗口模式：面板占满窗口；最外层用圆角（与便签窗口一致），
+   四角透明区露出桌面，形成圆角卡片浮于桌面的观感。背景默认用 --bg 垫底，
+   透明主题下由 .bg-transparent 改为透明以透出原生亚克力。 */
 .settings-standalone .settings-modal {
   width: 100%;
   height: 100%;
   max-height: none;
-  border-radius: 0;
-  box-shadow: none;
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  background: var(--bg);
+}
+/* 透明主题：窗口本体即亚克力磨砂，面板须透明，且去掉投影 */
+.settings-modal.bg-transparent {
   background: transparent;
+  box-shadow: none;
 }
 
 /* ===== 设置弹窗：左侧菜单 + 右侧内容 两栏布局 ===== */
