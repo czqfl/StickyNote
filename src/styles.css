@@ -1913,6 +1913,13 @@ body,
   flex-direction: column;
   overflow: hidden;
 }
+/* 设置面板内重定义次级/提示文字色：始终取主文字色的高可读比例，
+   避免部分主题（尤其透明/深色）下 --text-sub/--text-hint 与背景对比过低导致看不清。
+   作用域限定在 .settings-modal，不影响便签本体。 */
+.settings-modal {
+  --text-sub: color-mix(in srgb, var(--text) 80%, transparent);
+  --text-hint: color-mix(in srgb, var(--text) 64%, transparent);
+}
 
 /* 独立窗口模式：面板占满窗口；最外层用圆角（与便签窗口一致），
    四角透明区露出桌面，形成圆角卡片浮于桌面的观感。背景默认用 --bg 垫底，
