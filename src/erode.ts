@@ -411,7 +411,6 @@ function runErode(
   const emitT = new Float32Array(ecx * ecy); // 各发射点被前沿扫到的时刻
   const emitNX = new Float32Array(ecx * ecy); // 边缘法线（单位向量，指向前沿推进方向）
   const emitNY = new Float32Array(ecx * ecy);
-  const emitBurst = new Uint8Array(ecx * ecy); // 主爆发是否已触发
   const emitW = new Float32Array(ecx * ecy); // 发射权重：末段前沿大幅降权，避免火星在终点堆成“墙”
   let ecount = 0;
   const GRAD_EPS = 4;
@@ -441,7 +440,7 @@ function runErode(
   }
 
   // 余烬粒子池（SoA + swap-remove），数量随强度大幅提升
-  const maxEmbers = Math.round(560 + density * 1640); // 560 ~ 2200（寿命变长需更大池容量）
+  const maxEmbers = Math.round(1400 + density * 3000); // 1400 ~ 4400（细水长流+持久需大池，配合帧上限避免开头爆满导致后边寂灭）
   const ex = new Float32Array(maxEmbers);
   const ey = new Float32Array(maxEmbers);
   const evx = new Float32Array(maxEmbers);
@@ -466,7 +465,7 @@ function runErode(
     const dir = isDissolve ? 1 : -1;
     evx[i] = nmx * kick * dir + (Math.random() - 0.5) * 30;
     evy[i] = nmy * kick * dir - (46 + Math.random() * 96);
-    elife[i] = 620 + Math.random() * 820; // 0.62~1.44s：火星飘更久、火焰更持久
+    elife[i] = 500 + Math.random() * 700; // 0.5~1.2s：持久飘散；配合帧上限让池均匀周转、后边持续冒
     eage[i] = 0;
     esize[i] = (2.6 + Math.random() * 3.8) * (0.5 + 0.5 * w); // 更大更厚；末段更小
     eseed[i] = Math.random() * Math.PI * 2;
@@ -644,28 +643,35 @@ function runErode(
     pushMask(age, false);
     applyOpacity(age);
 
-    // ---- 余烬：前沿到达时爆发 + 短暂尾随火花 + 更新 + 绘制 ----
+    // ---- 余烬：随燃烧前沿推进、沿边持续渗出（细水长流）+ 更新 + 绘制 ----
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (age < wipe + 60) {
-      const burstN = 4 + Math.round(density * 8); // 每个前沿点爆发 4~12 粒（更厚、更贴边）
-      // 燃烧边缘 = 该点 mask 从“可见”变“透明”的过渡带（age ∈ [T, T+featherMs]），
-      // 其中点 T+featherMs/2 即视觉上的“正在燃烧处”。火星根必须落在过渡带内，
-      // 否则会在便签已烧黑后才点燃 → 看起来“不在燃烧边缘、而在烧过的地方冒”。
-      // 尾随窗口只取过渡带结束后极短一段（不再长尾随），让根始终紧贴当前燃边。
-      const burstAt = featherMs * 0.5; // 相对 T 的偏移：等到半透明边才点燃
-      const tailEnd = featherMs + 110; // 过渡带结束后仅补一点余烬（原 380ms 过长，根滞后）
+      // 燃烧边缘 = 该点 mask 从“可见”变“透明”的过渡带（age ∈ [T, T+featherMs]）。
+      // 火星根必须落在窗口 [T+burstAt, T+winEnd] 内：
+      //   - burstAt=featherMs/2：等到半透明边才点燃 → 根对齐“正在燃烧”处，不滞后已烧黑区；
+      //   - winEnd=featherMs+360：火舌飘离前沿一小段再熄，根随前沿推进而上移。
+      // 每个点在其窗口内**每帧低概率 spawn 1 粒**（而非一次性爆发一大簇），于是：
+      //   - 整段动画期间只要还有点处于窗口就持续冒 → 后边也出现（旧版一次爆发 + 长寿命把池塞满→后边寂灭）；
+      //   - 根沿边缘铺开、连续渗出的火舌，而不是一上来全屏齐发成“一团”。
+      const burstAt = featherMs * 0.5; // 相对 T：等到半透明边才点燃
+      const winEnd = featherMs + 360;  // 火舌飘离前沿后熄灭
+      // 全局每帧 spawn 上限：防止开头一帧把粒子池塞满、导致后续燃到的点 spawn 不到空位（后边寂灭）。
+      // 配合寿命与池容量，让粒子在整个动画里均匀周转、持续可见。
+      const spawnProb = 0.6; // 窗口内每点每帧 spawn 概率（细水长流）
+      const FRAME_CAP = Math.round(34 + density * 42); // 每帧最多约 34~76 粒
+      let spawned = 0;
       for (let i = 0; i < ecount; i++) {
         const T = emitT[i];
-        if (age < T + burstAt) continue; // 前沿扫到“半透明边”才点燃（根对齐燃烧边缘）
-        if (!emitBurst[i]) {
-          // 前沿刚扫到燃烧边：沿边缘法线爆发一簇火星（粒子密集地贴着锯齿边缘喷出）
-          emitBurst[i] = 1;
-          const bn = Math.max(0, Math.round(burstN * emitW[i])); // 末段前沿爆发数大幅减少
-          for (let k = 0; k < bn; k++) spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
-        } else if (age < T + tailEnd && Math.random() < 0.45 * emitW[i]) {
-          // 燃烧边过后极短尾随（余烬渐熄），根仍紧贴燃边、不滞留已烧黑区
-          spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
+        if (age < T + burstAt) continue;   // 沿前沿推进而点燃（根对齐燃烧边）
+        if (age > T + winEnd) continue;    // 火舌飘离后熄灭，不在已烧黑区滞留
+        if (spawned >= FRAME_CAP) break;   // 全帧上限：避免开头爆满
+        if (Math.random() < emitW[i] * spawnProb) {
+          // 根沿边缘铺开一点抖动，火舌有层次、不挤成一簇（更真实）
+          const ox = (Math.random() - 0.5) * emitSpacing;
+          const oy = (Math.random() - 0.5) * emitSpacing;
+          spawnEmber(emitX[i] + ox, emitY[i] + oy, emitNX[i], emitNY[i], emitW[i]);
+          spawned++;
         }
       }
     }
