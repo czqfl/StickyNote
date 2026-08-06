@@ -18,7 +18,7 @@
 // - 颜色（动态主题采样）：构建便签"区域颜色场"（--bg 底色 + has-bg 背景图 cover 为主导，
 //   底色仅轻量调和），按粒子**生成区域**采样对应背景颜色（背景是什么颜色粒子就是什么颜色），
 //   additive 叠加出辉光，边升边变淡直至自然消散。
-// - 形态/大小：鸿蒙式细微光点（亮核 ~0.8-1.2px + 外晕收紧，出生瞬间短促放大成高亮），
+// - 形态/大小：鸿蒙式细密光点（亮核 ~0.4-0.7px + 收紧外晕，出生瞬间轻微放大成前缘高亮），
 //   寿命 420~740ms（<1s 动画内完成起飘与淡出）。
 //
 // 工程契约（与 flame.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
@@ -524,7 +524,7 @@ function runGlow(
   // 采用「连续发射 + 峰值存活上限」模型：全局发射率由峰值存活数换算，池子只需容纳
   // peakAlive + 余量；不会像旧版"每格一次性爆发"那样被早发光的边缘格子趁池未满占满，
   // 导致中央（最后才扫到）格子被拒、留下一片无粒子空白。两道扫掠得以在中间用粒子衔接。
-  const peakAlive = Math.round(2600 + density * 16000); // 峰值存活粒子数 2600 ~ 18600（随强度；最大配置较旧版提升 3 倍）
+  const peakAlive = Math.round(3600 + density * 24000); // 峰值存活粒子数 3600 ~ 27600（更密；最大配置较旧版提升 ~1.5 倍）
   const avgLife = 620; // 粒子平均寿命 ms（<1s 动画内完成起飘与淡出；寿命短 → 发射率更高、粒子更密）
   const maxP = peakAlive + 1500; // 余量应对节流帧瞬时多发
   const px = new Float32Array(maxP);
@@ -678,7 +678,7 @@ function runGlow(
     pv1[i] = (620 + Math.random() * 300) * rv(); // 末速 ~620-920：越飘越快
     plife[i] = life;
     page[i] = 0;
-    psize[i] = 1.0 * (0.8 + Math.random() * 0.4); // 亮核 ~0.8-1.2px，大小 ±20%（深浅远近差异）
+    psize[i] = 0.55 * (0.7 + Math.random() * 0.5); // 亮核 ~0.39-0.66px（细光点：小且密）
     pseed[i] = Math.random() * Math.PI * 2;
     psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移（替代逐帧 sin 摆动）
     const [r, g, b] = sampleThemeColor(sx, y); // 采样生成区域的主题色
@@ -794,7 +794,7 @@ function runGlow(
       spawnAcc += emitRate * dt * 1000; // 该帧应生成的粒子总数（含小数残量累积）
       let n = Math.floor(spawnAcc);
       spawnAcc -= n;
-      if (n > 600) n = 600; // 兜底：节流长帧也不会一次喷爆池子（密度提升 3 倍后放宽上限）
+      if (n > 900) n = 900; // 兜底：节流长帧也不会一次喷爆池子（密度提升后放宽上限）
       for (let k = 0; k < n; k++) {
         // 按桶权重选一个激活桶
         let r = Math.random() * abTotalW;
@@ -842,12 +842,12 @@ function runGlow(
       px[i] += (dx * speed + psway[i]) * dt; // 恒定向漂移（替代逐帧 sin 摆动，省 CPU）
       py[i] += dy * speed * dt;
       const t = 1 - u;
-      const alpha = t * t * globalFade; // 边升边变淡（平方衰减）：刚粒子化时最亮 → 高亮前缘
+      const alpha = t * Math.sqrt(t) * globalFade; // 边升边变淡（1.5 次：比平方衰减慢 → 粒子更持久、观感更密）
       if (alpha < 0.02) continue;
-      // 刚粒子化（未上浮）的粒子带短促「出生高亮」：更大更亮 → 与已升空粒子 additive
-      // 叠加成明显的高亮区域（空间立体感核心）
-      const birth = u < 0.16 ? 1 - u / 0.16 : 0;
-      const haloR = psize[i] * (1 + birth * 1.1 - u * 0.25) * 1.6; // 亮核 + 外晕，出生瞬间放大
+      // 刚粒子化（未上浮）的粒子带短促「出生高亮」：略微放大 → 与已升空粒子 additive
+      // 叠加成高亮前缘（空间立体感核心）
+      const birth = u < 0.14 ? 1 - u / 0.14 : 0;
+      const haloR = psize[i] * (1 + birth * 0.7 - u * 0.2) * 1.25; // 亮核 + 收紧外晕，出生瞬间轻微放大
       const o = drawCount * 7;
       glData[o] = px[i] * dpr;          // 设备像素 x
       glData[o + 1] = py[i] * dpr;      // 设备像素 y
