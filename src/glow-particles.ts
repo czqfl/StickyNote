@@ -4,15 +4,14 @@
 // 触发：关闭窗口（dissolve）/ 呼出窗口（materialize，互为倒放）。
 // 两个方向**共用同一套粒子系统** → 粒子的形态 / 大小 / 颜色表现完全一致（仅运动方向相反）。
 //
-// 视觉要点（波峰消散 · 四边汇合）：
-// - 四边随机消散：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切，时间场由「四边随机源点」
-//   涟漪式向外扩散叠加而成——底部 / 顶部 / 左 / 右 各随机布点，每点带随机发起时刻与随机速度，
-//   使每次消散的波前形态都不同；四个方向的消散前沿最终在中央汇合、界面完全消失。
-// - 下方快上方慢：底部源点 scale 小（前沿快）、顶部源点 scale 大（前沿慢），左右中等——
-//   整体呈「下消上慢」的非对称推进，模拟真实物理的下坠消散感。
-// - 底部波峰（∩ 形）：底部仅在中线附近放「快源」，两侧不放快源 → 中线附近先空、边界上移（高），
-//   两侧源点远、最后才空、边界下垂（低），便签底边自然形成「中间高、两边低」的波峰拱形；
-//   边缘为光滑连续曲线（不叠加噪声），无锯齿无断裂。
+// 视觉要点（三方向消散 · 地形起伏前沿）：
+// - 每帧播放随机选取「一个」主方向，前沿为该方向的直线推进 + 垂直向地形起伏，彻底告别
+//   之前的四边涟漪/完美圆形；三种方向：
+//   ① 底部向上：基础由下往上推进，中部滞后形成「∪ 大谷」（非封顶），便签底边中央下凹；
+//   ② 顶部向下：基础由上往下推进，横向叠加「平缓不规则山峰」（少量峰谷、连续无锯齿、非单圆），
+//      整体水平但有起伏；
+//   ③ 左右择一侧：基础由该侧向对侧普通推进，纵向叠加平缓起伏，不呈圆形扩张。
+// - 各方向地形参数每次播放随机生成 → 每次观感明显不同又各自稳定；前沿为连续函数、边缘平滑无锯齿。
 // - 粒子一律向上飘：粒子生成后方向**锁死为向上**（pang≈0 ± 发散角），仅保留轻微横向抖动，
 //   不再沿边缘法线四散——所有微粒都朝上方升起、边升边淡出，呈现“被托起升空”的消散感。
 // - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散，不破坏整体上升一致性。
@@ -453,15 +452,9 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：四边随机源点「涟漪式」向外扩散，最终中央汇合 ----
-  // 每次播放随机在 底/顶/左/右 各布若干源点：源点位置(x/y)、发起时刻、速度都随机
-  // → 每次消散的波前形态都不同；四方向的消散前沿最终在便签中央汇合、整体消失。
-  // 速度不对称（下快上慢）：底部 scale 小（前沿快）、顶部 scale 大（前沿慢）、左右中等——
-  // 模拟真实物理的下坠消散感。
-  // 底部波峰（∩ 形）：底部只在「中线附近」放快源（≈1 个，x 紧贴中心），两侧不放快源 →
-  // 中线附近先空、边界上移（高），而底部两侧离任何源都远、最后才空、边界下垂（低），
-  // 便签底边自然形成「中间高、两边低」的波峰拱形。
-  // dissolve 语义：T 小=先消散（源点先空）；materialize 用 Tm=wipe-T 反向 → 源点最后成形。
+  // ---- 消散时间场 T(x,y)：每帧播放随机选取「一个」主方向，前沿为该方向直线推进 +
+  //   垂直向地形起伏，告别四边涟漪/完美圆形；三种方向（见文件头说明）。
+  // dissolve 语义：T 小=先消散；materialize 用 Tm=wipe-T 反向 → 该侧最后成形。
   const featherMs = 90; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
   const mw = Math.max(8, Math.round(w * maskScale));
@@ -477,58 +470,69 @@ function runGlow(
   const mimg = mctx.createImageData(mw, mh);
   const mpx32 = new Uint32Array(mimg.data.buffer); // 32 位写入，仅改最高字节(alpha)
 
-  // 平滑边缘：不叠加任何噪声/抖动，时间场 T 为纯连续函数 → 消散边缘光滑无锯齿。
+  // ---- 方向选择（每帧播放随机其一）----
+  type DirMode = "bottom" | "top" | "left" | "right";
+  const dirRoll = Math.random();
+  let dirMode: DirMode;
+  if (dirRoll < 0.34) dirMode = "bottom";
+  else if (dirRoll < 0.67) dirMode = "top";
+  else dirMode = Math.random() < 0.5 ? "left" : "right";
 
-  // 随机源点（每次播放重新生成 → 每次观感不同）
-  const diag = Math.hypot(w, h);
-  interface DissolveSource { x: number; y: number; t0: number; scale: number }
-  const sources: DissolveSource[] = [];
-  // 底部：1 个「中线附近」快源（形成底部波峰的“高”——中线先空、边界上移）；
-  // scale 最小（最快），使底部整体快于顶部。x 紧贴中心 ±一小段，保证“中间高”。
-  sources.push({
-    x: (0.5 + (Math.random() - 0.5) * 0.30) * w, // 中线附近 ±15%
-    y: h - Math.random() * 0.16 * h,               // 底部 0~16% 高度内随机
-    t0: Math.random() * 0.08 * wipe,
-    scale: 0.98,                                  // 底部：最快
-  });
-  // 顶部：1 个随机点，scale 最大（最慢）→ 上方消散慢
-  sources.push({
-    x: (0.12 + Math.random() * 0.76) * w,
-    y: Math.random() * 0.16 * h,
-    t0: Math.random() * 0.06 * wipe,
-    scale: 1.6,                                   // 顶部：最慢（与底部 0.98 形成明显速度差）
-  });
-  // 左侧：1~2 个随机点，中等速度
-  const nLeft = 1 + (Math.random() < 0.5 ? 1 : 0);
-  for (let s = 0; s < nLeft; s++) {
-    sources.push({
-      x: Math.random() * 0.16 * w,
-      y: (0.12 + Math.random() * 0.76) * h,
-      t0: Math.random() * 0.08 * wipe,
-      scale: 1.25,
-    });
+  // ---- 地形起伏参数（每次播放随机，保证"明显变化"且各自稳定）----
+  // 山峰（顶部向下）：少量控制点(3~4) + 余弦平滑插值 → 峰谷少、平缓、连续无锯齿、不规则。
+  interface CtrlPt { p: number; h: number } // p∈[0,1] 位置, h∈[-1,1] 高度
+  const K = 3 + (Math.random() < 0.5 ? 0 : 1);
+  const mtnPts: CtrlPt[] = [];
+  for (let i = 0; i < K; i++) {
+    const p = Math.max(0, Math.min(1, ((i + 0.5) + (Math.random() - 0.5) * 0.6) / K));
+    mtnPts.push({ p, h: Math.random() * 2 - 1 });
   }
-  // 右侧：1~2 个随机点，中等速度
-  const nRight = 1 + (Math.random() < 0.5 ? 1 : 0);
-  for (let s = 0; s < nRight; s++) {
-    sources.push({
-      x: w - Math.random() * 0.16 * w,
-      y: (0.12 + Math.random() * 0.76) * h,
-      t0: Math.random() * 0.08 * wipe,
-      scale: 1.25,
-    });
-  }
+  mtnPts.sort((a, b) => a.p - b.p);
+  const mtnAmp = (0.10 + Math.random() * 0.05) * wipe; // 山峰起伏幅度（平缓）
+  // 大谷（底部向上）：单条宽阔余弦谷，中部滞后最深 → ∪（非封顶）。
+  const valleyAmp = (0.15 + Math.random() * 0.05) * wipe;
+  // 左右推进起伏（平缓，不呈圆）。
+  const sideAmp = (0.06 + Math.random() * 0.04) * wipe;
+  const sideFreq = 1.5 + Math.random() * 1.2; // 1.5~2.7 个起伏
+  const sidePhase = Math.random() * Math.PI * 2;
 
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻：取「最近源点」的扩散时刻
-  const dissolveTimeAt = (nx: number, ny: number): number => {
-    let best = Infinity;
-    for (let si = 0; si < sources.length; si++) {
-      const sp = sources[si];
-      const d = Math.hypot(nx - sp.x, ny - sp.y) / diag; // 0(源点)..~1(最远)
-      const Tsrc = sp.t0 + Math.pow(d, 0.82) * (wipe * sp.scale);
-      if (Tsrc < best) best = Tsrc;
+  // 山峰采样：u∈[0,1] → [-1,1]，段内余弦平滑（C1 连续、无锯齿）。
+  const mtnSample = (u: number): number => {
+    if (u <= mtnPts[0].p) return mtnPts[0].h;
+    const last = mtnPts[mtnPts.length - 1];
+    if (u >= last.p) return last.h;
+    for (let i = 0; i < mtnPts.length - 1; i++) {
+      const a = mtnPts[i], b = mtnPts[i + 1];
+      if (u >= a.p && u <= b.p) {
+        const t = (u - a.p) / (b.p - a.p);
+        const s = 0.5 - 0.5 * Math.cos(Math.PI * t); // 余弦平滑，避免锯齿尖角
+        return a.h + (b.h - a.h) * s;
+      }
     }
-    let Tf = best;
+    return last.h;
+  };
+
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻：方向直线推进 + 垂直向地形起伏。
+  const dissolveTimeAt = (nx: number, ny: number): number => {
+    let T: number;
+    if (dirMode === "bottom") {
+      const base = (1 - ny / h) * wipe;                                  // 底部(大y)先消
+      const m = valleyAmp * (0.5 - 0.5 * Math.cos((2 * Math.PI * nx) / w)); // 中部滞后→∪大谷
+      T = base + m;
+    } else if (dirMode === "top") {
+      const base = (ny / h) * wipe;                                      // 顶部(小y)先消
+      const m = mtnAmp * mtnSample(nx / w);                              // 横向平缓山峰起伏
+      T = base + m;
+    } else if (dirMode === "left") {
+      const base = (nx / w) * wipe;                                      // 左侧先消→向右推进
+      const m = sideAmp * Math.sin(2 * Math.PI * sideFreq * (ny / h) + sidePhase);
+      T = base + m;
+    } else {
+      const base = (1 - nx / w) * wipe;                                  // 右侧先消→向左推进
+      const m = sideAmp * Math.sin(2 * Math.PI * sideFreq * (ny / h) + sidePhase);
+      T = base + m;
+    }
+    let Tf = T;
     if (Tf < 0) Tf = 0;
     else if (Tf > wipe - featherMs) Tf = wipe - featherMs;
     return Tf;
