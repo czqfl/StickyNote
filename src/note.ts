@@ -2004,6 +2004,9 @@ export function mountNoteApp(noteId: string, preset = "") {
     e.preventDefault();
     e.stopPropagation();
     winResizing = true;
+    // 缩放期间临时切到 resizable+shadow（复刻稳定态），避免 transparent+shadow(false) 下 setSize 触发 WebView2 重建崩溃
+    appWindow.setResizable(true).catch(() => {});
+    appWindow.setShadow(true).catch(() => {});
     resStartX = e.clientX;
     resStartY = e.clientY;
     resStartW = window.innerWidth;
@@ -2025,6 +2028,9 @@ export function mountNoteApp(noteId: string, preset = "") {
   const endWinResize = (e: PointerEvent) => {
     if (!winResizing) return;
     winResizing = false;
+    // 缩放结束恢复：静止状态无投影、无系统缩放
+    appWindow.setResizable(false).catch(() => {});
+    appWindow.setShadow(false).catch(() => {});
     try {
       winResizer.releasePointerCapture(e.pointerId);
     } catch {

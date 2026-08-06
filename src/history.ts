@@ -110,6 +110,8 @@ export function mountHistoryApp() {
     e.preventDefault();
     e.stopPropagation();
     winResizing = true;
+    appWindow.setResizable(true).catch(() => {});
+    appWindow.setShadow(true).catch(() => {});
     resStartX = e.clientX;
     resStartY = e.clientY;
     resStartW = window.innerWidth;
@@ -131,6 +133,8 @@ export function mountHistoryApp() {
   const endWinResize = (e: PointerEvent) => {
     if (!winResizing) return;
     winResizing = false;
+    appWindow.setResizable(false).catch(() => {});
+    appWindow.setShadow(false).catch(() => {});
     try {
       winResizer.releasePointerCapture(e.pointerId);
     } catch {
