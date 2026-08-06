@@ -4,22 +4,23 @@
 // 触发：关闭窗口（dissolve）/ 呼出窗口（materialize，互为倒放）。
 // 两个方向**共用同一套粒子系统** → 粒子的形态 / 大小 / 颜色表现完全一致（仅运动方向相反）。
 //
-// 视觉要点（鸿蒙删除同款 · 多区域错峰消散）：
+// 视觉要点（鸿蒙删除同款 · 多区域错峰消散 · 放慢 10 倍）：
 // - 多区域错峰消散：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切；随机 2~4 个消散区域
-//   （可贴边、也可在中间），先 1~2 处开始消散，隔一段（~250-500ms）再出现 1~3 处也开始消散；
-//   每个区域以自身为起点向外蔓延（向上略偏置，连带上周边一起逐渐消散），取 min 叠加 →
-//   各区域前沿先后推进、最终全覆盖，总时长 <1s。
-// - 粒子带初速度 + 加速度：生成后方向锁死为向上（pang≈0 ± 发散角），初速慢（~90-190px/s）、
-//   越飘越快（ease-in-quad 加速到 ~620-920px/s），边升边淡出——「被托起升空」的消散感。
-// - 空间立体感（核心）：早发区域的粒子已升空加速，与晚发区域「刚粒子化、尚未上浮」的粒子
-//   在屏幕上重叠（additive 辉光叠加）→ 形成明显的高亮前缘；刚出生的粒子带短促放大高亮。
+//   （可贴边、也可在中间），先 1~2 处开始消散，隔一段（~2.6-5.4s）再出现 1~3 处也开始消散；
+//   每个区域以自身为起点向外蔓延，且**方向性扩张（非圆形）**：向上快（等效距离 ×0.5）、
+//   向下慢（×1.5）→ 区域向上/上周边蔓延明显快于向下；取 min 叠加 → 各区域前沿先后推进、
+//   最终全覆盖，总时长 ~9.7s（放慢 10 倍，便于观察全过程）。
+// - 粒子「初速度 ≈ 0 + 悬浮期」：刚粒子化先悬浮（悬浮期占寿命 ~15%，区域仍以粒子形态
+//   可见、不立即漂浮），悬浮期后从 0 开始向上加速（ramp² 二次曲线，越飘越快），边升边淡出。
+// - 空间立体感（核心）：早发区域的粒子已升空加速，与晚发区域「刚粒子化、正在悬浮」的粒子
+//   在屏幕上重叠（additive 辉光叠加）→ 形成明显的高亮前缘。
 // - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散 + 区域随机，
 //   不破坏整体上升一致性。
 // - 颜色（动态主题采样）：构建便签"区域颜色场"（--bg 底色 + has-bg 背景图 cover 为主导，
 //   底色仅轻量调和），按粒子**生成区域**采样对应背景颜色（背景是什么颜色粒子就是什么颜色），
 //   additive 叠加出辉光，边升边变淡直至自然消散。
 // - 形态/大小：鸿蒙式细密光点（亮核 ~0.4-0.7px + 收紧外晕，出生瞬间轻微放大成前缘高亮），
-//   寿命 420~740ms（<1s 动画内完成起飘与淡出）。
+//   寿命 4200~7400ms（放慢 10 倍）。
 //
 // 工程契约（与 flame.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
 // cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出↔关闭"互相打断；
@@ -299,10 +300,11 @@ function runGlow(
   const density = Math.max(0, Math.min(100, particleDensity)) / 100;
 
   // ---- 时序参数（两方向一致，保证粒子表现完全一致）----
-  const wipe = 800; // 多区域错峰消散主体时长 ms（总动画 <1s）
-  const endFade = 150; // 末端全局淡出带宽，避免被强制收尾硬切
-  const duration = wipe + 170; // 总时长 ~970ms（<1s）
-  const emitWindow = 420; // 每个发射点在前沿扫过后持续涌出粒子的窗口 ms（上飘拖尾，区域前沿连贯）
+  const wipe = 8000; // 多区域错峰消散主体时长 ms（放慢 10 倍，便于观察粒子化→悬浮→加速全过程）
+  const endFade = 1500; // 末端全局淡出带宽，避免被强制收尾硬切
+  const duration = wipe + 1700; // 总时长 ~9700ms（原 ~970ms ×10）
+  const emitWindow = 4200; // 每个发射点在前沿扫过后持续涌出粒子的窗口 ms（上飘拖尾，区域前沿连贯）
+  const hoverFrac = 0.15; // 粒子「悬浮期」占寿命比例：刚粒子化先悬浮（区域仍以粒子形态可见），随后向上加速
 
   // ---- 粒子覆盖层 canvas（WebGL：GPU 单次 draw call 渲染点精灵，替代逐粒 drawImage）----
   const canvas = document.createElement("canvas");
@@ -422,13 +424,13 @@ function runGlow(
 
   // ---- 消散时间场 T(x,y)：多区域错峰消散（鸿蒙删除同款观感）----
   // 随机 2~4 个消散区域（可贴边、也可在中间），分两批错峰发起——
-  //   先 1~2 处开始消散，隔一段（~250-500ms）再出现 1~3 处也开始消散；
-  // 每个区域以自身为起点向外蔓延（向上略偏置 → 连带上周边一起逐渐消散），
-  // 取 min 叠加 → 各区域前沿先后推进、最终全覆盖，总时长 <1s。
-  // 粒子核心：初速度 + 持续加速度（越飘越快）；早发区域粒子已升空、与晚发区域
-  // 刚粒子化未上浮的粒子 additive 叠加 → 前缘高亮、有空间立体感。
+  //   先 1~2 处开始消散，隔一段（~2.6-5.4s）再出现 1~3 处也开始消散；
+  // 每个区域以自身为起点向外蔓延，且**方向性扩张（非圆形）**：向上快、向下慢
+  // （等效距离 上×0.5 / 下×1.5）→ 连带上周边一起逐渐消散，总时长 ~9.7s（放慢 10 倍）。
+  // 粒子核心：初速度 ≈ 0 + 悬浮期（区域刚粒子化先悬浮、以粒子形态可见），
+  // 悬浮后从 0 向上加速（越飘越快）；早发粒子与晚发刚粒子化粒子 additive 叠加 → 前缘高亮。
   // dissolve 语义：T 小=先消散（区域先空）；materialize 用 wipe-T 反向。
-  const featherMs = 60; // 羽化软边时间带宽
+  const featherMs = 600; // 羽化软边时间带宽（放慢 10 倍）
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
   const mw = Math.max(8, Math.round(w * maskScale));
   const mh = Math.max(8, Math.round(h * maskScale));
@@ -454,7 +456,7 @@ function runGlow(
     regions.push({
       x: Math.random() * w, // 任意位置：边上或中间
       y: Math.random() * h,
-      t0: early ? Math.random() * 90 : 260 + Math.random() * 280, // 错峰发起（第二批 ~260-540ms）
+      t0: early ? Math.random() * 900 : 2600 + Math.random() * 2800, // 错峰发起（放慢 10 倍：首批 ~0-0.9s，第二批 ~2.6-5.4s）
       scale: 1.7 + Math.random() * 0.7, // 蔓延速度（大=慢）：配合 <1s 总时长
     });
   }
@@ -494,8 +496,8 @@ function runGlow(
       const r = regions[i];
       const dx = nx - r.x;
       const dy = ny - r.y; // 屏幕坐标 y 向下：dy<0 = 在区域上方
-      // 向上略偏置：区域上方的等效距离更短 → 向上/上周边蔓延更快（连带上边一起消散）
-      const eff = Math.hypot(dx, dy) - 0.32 * Math.max(0, -dy);
+      // 方向性扩张（非圆形）：向上快、向下慢——上方等效距离压缩(×0.5)、下方拉伸(×1.5)
+      const eff = Math.hypot(dx, dy * (dy < 0 ? 0.5 : 1.5));
       const Tsrc = r.t0 + (eff / diag) * wipe * r.scale;
       if (Tsrc < best) best = Tsrc;
     }
@@ -525,7 +527,7 @@ function runGlow(
   // peakAlive + 余量；不会像旧版"每格一次性爆发"那样被早发光的边缘格子趁池未满占满，
   // 导致中央（最后才扫到）格子被拒、留下一片无粒子空白。两道扫掠得以在中间用粒子衔接。
   const peakAlive = Math.round(3600 + density * 24000); // 峰值存活粒子数 3600 ~ 27600（更密；最大配置较旧版提升 ~1.5 倍）
-  const avgLife = 620; // 粒子平均寿命 ms（<1s 动画内完成起飘与淡出；寿命短 → 发射率更高、粒子更密）
+  const avgLife = 6200; // 粒子平均寿命 ms（放慢 10 倍；把峰值存活换算成发射率）
   const maxP = peakAlive + 1500; // 余量应对节流帧瞬时多发
   const px = new Float32Array(maxP);
   const py = new Float32Array(maxP);
@@ -660,13 +662,13 @@ function runGlow(
   };
 
   // 在前沿 (x,y) 生成一粒发光微粒；颜色采样自该生成区域的主题色。age 用于把寿命夹到收尾窗口内。
-  // 核心：粒子带「初速度 + 加速度」——初速慢、越飘越快（速度曲线 ease-in-quad 见帧循环），
-  // 早发区域粒子已升空、与晚发区域刚粒子化未上浮的粒子 additive 叠加成高亮前缘。
+  // 核心：粒子「初速度 ≈ 0」——刚粒子化先悬浮（区域仍以粒子形态可见、不立即漂浮），
+  // 随后从 0 开始向上加速（越飘越快）；早发区域粒子与晚发刚粒子化粒子 additive 叠加成高亮。
   const spawn = (x: number, y: number, age: number): void => {
     if (pcount >= maxP) return;
-    let life = 420 + Math.random() * 320; // 420~740ms：<1s 动画内完成起飘与淡出
-    const fit = duration - age - 60;
-    if (fit < 140) return;
+    let life = 4200 + Math.random() * 3200; // 4200~7400ms（放慢 10 倍）
+    const fit = duration - age - 600;
+    if (fit < 1400) return;
     if (life > fit) life = fit;
     const i = pcount++;
     const sx = x + (Math.random() - 0.5) * (w / ecx);
@@ -674,13 +676,13 @@ function runGlow(
     py[i] = y + (Math.random() - 0.5) * 4;
     pang[i] = (Math.random() - 0.5) * ((70 * Math.PI) / 180); // 一律向上（pang=0 为竖直向上）±35° 发散
     const rv = () => 0.8 + Math.random() * 0.4; // 速度 ±20% 随机差异
-    pv0[i] = (90 + Math.random() * 100) * rv(); // 初速 ~90-190：缓慢起飘（让加速度有发挥空间）
-    pv1[i] = (620 + Math.random() * 300) * rv(); // 末速 ~620-920：越飘越快
+    pv0[i] = (6 + Math.random() * 8) * rv(); // 初速 ≈0（悬浮期速度，实际不移动）
+    pv1[i] = (70 + Math.random() * 70) * rv(); // 末速 ~70-140：悬浮后缓慢向上加速
     plife[i] = life;
     page[i] = 0;
     psize[i] = 0.55 * (0.7 + Math.random() * 0.5); // 亮核 ~0.39-0.66px（细光点：小且密）
     pseed[i] = Math.random() * Math.PI * 2;
-    psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移（替代逐帧 sin 摆动）
+    psway[i] = (Math.random() - 0.5) * 2.8; // ±1.4 px/s 恒定向漂移（放慢 10 倍）
     const [r, g, b] = sampleThemeColor(sx, y); // 采样生成区域的主题色
     pr[i] = r / 255; pg[i] = g / 255; pb[i] = b / 255; // 主题色直接入粒子，GPU 程序化绘制
   };
@@ -836,7 +838,10 @@ function runGlow(
         i--;
         continue;
       }
-      const speed = pv0[i] + (pv1[i] - pv0[i]) * u * u; // ease-in-quad 柔和加速
+      // 初速度 ≈ 0：刚粒子化先「悬浮」（区域仍以粒子形态可见、不立即漂浮），
+      // 悬浮期后从 0 开始向上加速（ramp² 二次曲线 → 越飘越快）
+      const ramp = u < hoverFrac ? 0 : (u - hoverFrac) / (1 - hoverFrac);
+      const speed = pv1[i] * ramp * ramp;
       const dx = Math.sin(pang[i]);
       const dy = -Math.cos(pang[i]); // 向上为负 y
       px[i] += (dx * speed + psway[i]) * dt; // 恒定向漂移（替代逐帧 sin 摆动，省 CPU）
