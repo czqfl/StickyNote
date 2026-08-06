@@ -368,7 +368,7 @@ function runGlow(
   ctx.scale(dpr, dpr);
 
   // ---- 动态颜色辉光精灵：按采样主题色生成并缓存（量化避免过多）----
-  const SS = 24;
+  const SS = 12; // 精灵尺寸收紧（原 24）：粒子实际绘制 ~2-5px，12px 源已足够柔光，绘制光栅化量降到 1/4
   const spriteList: HTMLCanvasElement[] = [];
   const spriteKeyToIdx = new Map<string, number>();
   const spriteIndexFor = (r: number, g: number, b: number): number => {
@@ -535,6 +535,7 @@ function runGlow(
   const psize = new Float32Array(maxP);
   const pseed = new Float32Array(maxP);
   const psprite = new Uint16Array(maxP); // 颜色精灵索引
+  const psway = new Float32Array(maxP); // 每粒恒定横向漂移速度 px/s（替代逐帧 Math.sin 摆动，省 CPU）
   let pcount = 0;
 
   // ---- 发射点网格：铺满整面（更密），每个点在前沿扫过后持续涌出粒子（见帧循环）----
@@ -545,7 +546,6 @@ function runGlow(
   const emitY = new Float32Array(ecx * ecy);
   const emitT = new Float32Array(ecx * ecy); // 各发射点被前沿扫到的时刻
   const emitW = new Float32Array(ecx * ecy); // 发射权重：末段前沿大幅降权，避免粒子在终点堆成“墙”
-  const activeIdx = new Int32Array(ecx * ecy); // 帧内“处于激活窗口”的发射点索引（持续涌出粒子）
   let ecount = 0;
   for (let iy = 0; iy < ecy; iy++) {
     for (let ix = 0; ix < ecx; ix++) {
@@ -564,6 +564,24 @@ function runGlow(
       ecount++;
     }
   }
+  // 发射点按“被前沿扫到的时刻 T”分桶（binSize ms），避免每帧扫描全部 ~1.2 万点找激活点：
+  // 每帧只需遍历落在 [age-emitWindow, age] 区间内的少数桶（~28 个）。
+  const binSize = 20;
+  const binCount = Math.ceil((wipe + emitWindow) / binSize) + 1;
+  const binPts: number[][] = [];
+  const binW = new Float32Array(binCount);
+  const binMaxW = new Float32Array(binCount);
+  for (let b = 0; b < binCount; b++) binPts.push([]);
+  for (let i = 0; i < ecount; i++) {
+    let b = Math.floor(emitT[i] / binSize);
+    if (b < 0) b = 0;
+    else if (b >= binCount) b = binCount - 1;
+    binPts[b].push(i);
+    binW[b] += emitW[i];
+    if (emitW[i] > binMaxW[b]) binMaxW[b] = emitW[i];
+  }
+  const abBins = new Int32Array(binCount); // 帧内激活桶集合（预分配，避免每帧 new）
+  const abW = new Float32Array(binCount);
   // 全局发射率：把峰值存活数换算成「粒子/ms」上限（peakAlive / 平均寿命）；
   // 每帧按该速率从“激活窗口内”的发射点中加权采样生成，使整段动画匀速涌出、
   // 顶/底两道前沿同时持续冒粒子并在中央汇合，绝不出现中段空白。
@@ -657,6 +675,7 @@ function runGlow(
     page[i] = 0;
     psize[i] = 0.6 + Math.random() * 0.9; // 亮核 ~0.6-1.5px（鸿蒙式细微光点）
     pseed[i] = Math.random() * Math.PI * 2;
+    psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移（替代逐帧 sin 摆动）
     const [r, g, b] = sampleThemeColor(sx, y); // 采样生成区域的主题色
     psprite[i] = spriteIndexFor(r, g, b);
   };
@@ -742,33 +761,41 @@ function runGlow(
       else if (op > 1) op = 1;
       root.style.opacity = op.toFixed(3);
     }
-    // 连续发射：每帧从“正处于激活窗口（前沿扫过后的 emitWindow 内）”的发射点中，
-    // 按 emitW 加权随机采样若干点生成粒子。这种“全局速率直接落地”的做法不受
-    // “每点累积到 1 才发”的阈值限制（旧版因此阈值永远到不了 → 几乎不冒粒子）；
-    // 顶/底两道前沿每帧都在冒粒子，随窗口推进连续向中央汇合，中段不会空。
-    let activeCount = 0;
-    let activeMaxW = 0;
-    for (let i = 0; i < ecount; i++) {
-      const T = emitT[i];
-      if (age >= T && age <= T + emitWindow) {
-        activeIdx[activeCount++] = i;
-        if (emitW[i] > activeMaxW) activeMaxW = emitW[i];
+    // 连续发射：从“激活窗口内的发射点”按 emitW 加权采样生成（全局速率直接落地）。
+    // 先收集落在 [age-emitWindow, age] 的激活桶（~28 个，远少于全部发射点），再从中选点，
+    // 避免每帧扫描 ~1.2 万点；顶/底两道前沿每帧持续冒粒子、向中央连续汇合。
+    let abCount = 0;
+    let abTotalW = 0;
+    const b0 = Math.max(0, Math.floor((age - emitWindow) / binSize));
+    const b1 = Math.min(binCount - 1, Math.floor(age / binSize));
+    for (let b = b0; b <= b1; b++) {
+      if (binW[b] > 0) {
+        abBins[abCount] = b;
+        abW[abCount] = binW[b];
+        abTotalW += binW[b];
+        abCount++;
       }
     }
-    if (activeCount > 0) {
+    if (abCount > 0) {
       spawnAcc += emitRate * dt * 1000; // 该帧应生成的粒子总数（含小数残量累积）
       let n = Math.floor(spawnAcc);
       spawnAcc -= n;
       if (n > 600) n = 600; // 兜底：节流长帧也不会一次喷爆池子（密度提升 3 倍后放宽上限）
       for (let k = 0; k < n; k++) {
-        // 按 emitW 拒绝采样选一个激活点（权重高的点更常被选中 → 后段/中央更多粒子）
-        let idx = activeIdx[(Math.random() * activeCount) | 0];
-        for (let tr = 0; tr < 5; tr++) {
-          const cand = activeIdx[(Math.random() * activeCount) | 0];
-          if (Math.random() * activeMaxW <= emitW[cand]) {
-            idx = cand;
-            break;
-          }
+        // 按桶权重选一个激活桶
+        let r = Math.random() * abTotalW;
+        let bb = abBins[abCount - 1];
+        for (let z = 0; z < abCount; z++) {
+          r -= abW[z];
+          if (r <= 0) { bb = abBins[z]; break; }
+        }
+        const pts = binPts[bb];
+        // 桶内按 emitW 拒绝采样选一个发射点（权重高的更常被选中 → 后段/中央更多粒子）
+        let idx = pts[(Math.random() * pts.length) | 0];
+        const mw = binMaxW[bb];
+        for (let tr = 0; tr < 4; tr++) {
+          const cand = pts[(Math.random() * pts.length) | 0];
+          if (Math.random() * mw <= emitW[cand]) { idx = cand; break; }
         }
         spawn(emitX[idx], emitY[idx], age);
       }
@@ -789,7 +816,7 @@ function runGlow(
           px[i] = px[last]; py[i] = py[last]; pang[i] = pang[last];
           pv0[i] = pv0[last]; pv1[i] = pv1[last]; plife[i] = plife[last];
           page[i] = page[last]; psize[i] = psize[last]; pseed[i] = pseed[last];
-          psprite[i] = psprite[last];
+          psprite[i] = psprite[last]; psway[i] = psway[last];
         }
         i--;
         continue;
@@ -797,10 +824,10 @@ function runGlow(
       const speed = pv0[i] + (pv1[i] - pv0[i]) * u * u; // ease-in-quad 柔和加速
       const dx = Math.sin(pang[i]);
       const dy = -Math.cos(pang[i]); // 向上为负 y
-      const sway = Math.sin(age * 0.005 + pseed[i]) * 16; // 极轻微左右呼吸摆动
-      px[i] += (dx * speed + sway) * dt;
+      px[i] += (dx * speed + psway[i]) * dt; // 恒定向漂移（替代逐帧 sin 摆动，省 CPU）
       py[i] += dy * speed * dt;
-      const alpha = Math.pow(1 - u, 1.25) * globalFade; // 边升边变淡，自然消散
+      const t = 1 - u;
+      const alpha = t * t * globalFade; // 边升边变淡（平方衰减，替代 Math.pow 更省 CPU）
       if (alpha < 0.02) continue;
       const haloR = psize[i] * (1 - u * 0.25) * 1.6; // 亮核 + 外晕收紧（鸿蒙式细光点），略随生命收缩
       ctx.globalAlpha = alpha;
