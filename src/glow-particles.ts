@@ -4,16 +4,15 @@
 // 触发：关闭窗口（dissolve）/ 呼出窗口（materialize，互为倒放）。
 // 两个方向**共用同一套粒子系统** → 粒子的形态 / 大小 / 颜色表现完全一致（仅运动方向相反）。
 //
-// 视觉要点（三方向消散 · 地形起伏前沿）：
-// - 每帧播放随机选取「一个」主方向，前沿为该方向的直线推进 + 垂直向地形起伏，彻底告别
-//   之前的四边涟漪/完美圆形；三种方向：
-//   ① 底部向上：基础由下往上推进，中部滞后形成「∪ 大谷」（非封顶），便签底边中央下凹；
-//   ② 顶部向下：基础由上往下推进，横向叠加「平缓不规则山峰」（少量峰谷、连续无锯齿、非单圆），
-//      整体水平但有起伏；
-//   ③ 左右择一侧：基础由该侧向对侧普通推进，纵向叠加平缓起伏，不呈圆形扩张。
-// - 各方向地形参数每次播放随机生成 → 每次观感明显不同又各自稳定；前沿为连续函数、边缘平滑无锯齿。
-// - 粒子一律向上飘：粒子生成后方向**锁死为向上**（pang≈0 ± 发散角），仅保留轻微横向抖动，
-//   不再沿边缘法线四散——所有微粒都朝上方升起、边升边淡出，呈现“被托起升空”的消散感。
+// 视觉要点（三方向同时发起 · 中心归聚）：
+// - 每次播放**同时**从三个方向发起消散：底部向上 + 上部向下为必选，左右随机择一侧（向对侧）；
+//   三前沿各自朝画布中心推进，取「最早到达」(min) 为该点消散时刻 → 便签向中心收缩并消失（归聚于中心）。
+// - 前沿形态：
+//   ① 上侧 / 左右选侧：水平山脊状，带轻微起伏、远观如山峰细波（少量峰谷、连续无锯齿）；
+//   ② 底部：方状尖峰——中线附近提前消解，自底部升起一座尖塔（三角硬边=方状）。
+// - 粒子方向由「向上」改为「朝中心汇聚」，三向粒子流最终在中心归聚成一团淡出。
+// - 粒子向中心汇聚：粒子生成后方向**锁死为朝画布中心**（带轻微角散），三向粒子流最终在中心
+//   归聚成一团并淡出；叠加阵风湍流保留风吹沙感，但不再笔直上升。
 // - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散，不破坏整体上升一致性。
 // - 加速飘散：ease-in-quad 二次缓动，初速 ~200-330px/s → 末速 ~520-780px/s（逐粒子 ±20%），
 //   附加极轻微横向摆动，柔和不"嗖"地飞走。
@@ -470,17 +469,18 @@ function runGlow(
   const mimg = mctx.createImageData(mw, mh);
   const mpx32 = new Uint32Array(mimg.data.buffer); // 32 位写入，仅改最高字节(alpha)
 
-  // ---- 方向选择（每帧播放随机其一）----
-  type DirMode = "bottom" | "top" | "left" | "right";
-  const dirRoll = Math.random();
-  let dirMode: DirMode;
-  if (dirRoll < 0.34) dirMode = "bottom";
-  else if (dirRoll < 0.67) dirMode = "top";
-  else dirMode = Math.random() < 0.5 ? "left" : "right";
+  // ---- 三方向同时发起，最终于中心归聚 ----
+  // 必选：底部向上 + 上部向下；左右随机择一侧（向对侧）。三前沿各自朝中心推进，
+  // 取三者「最早到达」(min) 作为该点消散时刻 → 便签向中心收缩并消失（归聚于中心）。
+  // 形态：
+  //  · 上侧 / 左右选侧：水平山脊状前沿，横向(或纵向)带轻微起伏、远观如山峰细波；
+  //  · 底部：方状尖峰——中线附近提前消解，自底部升起一座尖塔(三角硬边=方状)。
+  const cx = w * 0.5;
+  const cy = h * 0.5;
+  const leftSide = Math.random() < 0.5; // 左右择一侧：true=左→右，false=右→左
 
-  // ---- 地形起伏参数（每次播放随机，保证"明显变化"且各自稳定）----
-  // 山峰（顶部向下）：少量控制点(3~4) + 余弦平滑插值 → 峰谷少、平缓、连续无锯齿、不规则。
-  interface CtrlPt { p: number; h: number } // p∈[0,1] 位置, h∈[-1,1] 高度
+  // 山峰起伏参数（每次播放随机，峰谷少、平缓、连续无锯齿、不规则）
+  interface CtrlPt { p: number; h: number } // p∈[0,1], h∈[-1,1]
   const K = 3 + (Math.random() < 0.5 ? 0 : 1);
   const mtnPts: CtrlPt[] = [];
   for (let i = 0; i < K; i++) {
@@ -488,15 +488,17 @@ function runGlow(
     mtnPts.push({ p, h: Math.random() * 2 - 1 });
   }
   mtnPts.sort((a, b) => a.p - b.p);
-  const mtnAmp = (0.10 + Math.random() * 0.05) * wipe; // 山峰起伏幅度（平缓）
-  // 大谷（底部向上）：单条宽阔余弦谷，中部滞后最深 → ∪（非封顶）。
-  const valleyAmp = (0.15 + Math.random() * 0.05) * wipe;
-  // 左右推进起伏（平缓，不呈圆）。
-  const sideAmp = (0.06 + Math.random() * 0.04) * wipe;
-  const sideFreq = 1.5 + Math.random() * 1.2; // 1.5~2.7 个起伏
-  const sidePhase = Math.random() * Math.PI * 2;
+  const mtnAmp = (0.04 + Math.random() * 0.04) * wipe; // 山峰起伏幅度（轻微）
+  // 底部尖峰：三角(硬边=方状)缺口，中线附近提前消解 → 自底升起的尖塔
+  const spikeAmp = (0.16 + Math.random() * 0.06) * wipe;
+  const spikeHalf = (0.10 + Math.random() * 0.05) * w; // 尖峰半宽
+  const spikeMod = (x: number): number => {
+    const d = Math.abs(x - cx);
+    if (d >= spikeHalf) return 0;
+    return -spikeAmp * (1 - d / spikeHalf); // 三角：中线最深(最负)，边缘为 0
+  };
 
-  // 山峰采样：u∈[0,1] → [-1,1]，段内余弦平滑（C1 连续、无锯齿）。
+  // 山峰采样：u∈[0,1] → [-1,1]，段内余弦平滑（C1 连续、无锯齿）
   const mtnSample = (u: number): number => {
     if (u <= mtnPts[0].p) return mtnPts[0].h;
     const last = mtnPts[mtnPts.length - 1];
@@ -512,27 +514,26 @@ function runGlow(
     return last.h;
   };
 
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻：方向直线推进 + 垂直向地形起伏。
+  // 各前沿「到达 (nx,ny) 的时刻」（各自朝中心推进，到中心≈wipe）
+  const tTop = (nx: number, ny: number): number => {
+    const base = (ny / (h * 0.5)) * wipe;       // 顶部(y=0)先消，到中心(y=h/2)=wipe
+    const m = mtnAmp * mtnSample(nx / w);        // 横向山脊起伏
+    return base + m;
+  };
+  const tBottom = (nx: number, ny: number): number => {
+    const base = ((h - ny) / (h * 0.5)) * wipe;  // 底部(y=h)先消，到中心=wipe
+    const m = spikeMod(nx);                       // 中线尖峰(负)→提前消解
+    return base + m;
+  };
+  const tSide = (nx: number, ny: number): number => {
+    const base = (leftSide ? nx / (w * 0.5) : (w - nx) / (w * 0.5)) * wipe; // 该侧先消，到中心=wipe
+    const m = mtnAmp * mtnSample(ny / h);         // 纵向山脊起伏（侧边天空线）
+    return base + m;
+  };
+
+  // 取三前沿最早到达 → 便签向中心收缩（三者于中心归聚）
   const dissolveTimeAt = (nx: number, ny: number): number => {
-    let T: number;
-    if (dirMode === "bottom") {
-      const base = (1 - ny / h) * wipe;                                  // 底部(大y)先消
-      const m = valleyAmp * (0.5 - 0.5 * Math.cos((2 * Math.PI * nx) / w)); // 中部滞后→∪大谷
-      T = base + m;
-    } else if (dirMode === "top") {
-      const base = (ny / h) * wipe;                                      // 顶部(小y)先消
-      const m = mtnAmp * mtnSample(nx / w);                              // 横向平缓山峰起伏
-      T = base + m;
-    } else if (dirMode === "left") {
-      const base = (nx / w) * wipe;                                      // 左侧先消→向右推进
-      const m = sideAmp * Math.sin(2 * Math.PI * sideFreq * (ny / h) + sidePhase);
-      T = base + m;
-    } else {
-      const base = (1 - nx / w) * wipe;                                  // 右侧先消→向左推进
-      const m = sideAmp * Math.sin(2 * Math.PI * sideFreq * (ny / h) + sidePhase);
-      T = base + m;
-    }
-    let Tf = T;
+    let Tf = Math.min(tTop(nx, ny), tBottom(nx, ny), tSide(nx, ny));
     if (Tf < 0) Tf = 0;
     else if (Tf > wipe - featherMs) Tf = wipe - featherMs;
     return Tf;
@@ -598,8 +599,7 @@ function runGlow(
       // 粒子数量随时间递增：前 50% 动画时间消散的粒子少、后 50% 多
       // （粒子化速度较快 → 主体粒子集中在动画后半段涌出，避免前半段一拥而上）
       const t01 = Math.max(0, Math.min(1, emitT[ecount] / wipe));
-      let ww = 0.25 + 0.75 * t01; // 线性递增：早期 0.25，末期 1.0
-      ww = ww * ww; // 二次 → 前段抑制更强，后段占比更大
+      let ww = 1.0 - 0.45 * t01; // 起侧(早消)权重高 → 三向粒子流明显朝中心汇聚
       emitW[ecount] = ww;
       ecount++;
     }
@@ -707,7 +707,9 @@ function runGlow(
     const sx = x + (Math.random() - 0.5) * (w / ecx);
     px[i] = sx;
     py[i] = y + (Math.random() - 0.5) * 4;
-    pang[i] = (Math.random() - 0.5) * ((70 * Math.PI) / 180); // 一律向上（pang=0 为竖直向上）±35° 发散，不再沿边缘法线
+    const dxT = cx - sx;            // 朝画布中心汇聚
+    const dyT = cy - py[i];
+    pang[i] = Math.atan2(dxT, -dyT) + (Math.random() - 0.5) * 0.35; // 朝中心 + 轻微角散
     const rv = () => 0.8 + Math.random() * 0.4; // 速度 ±20% 随机差异
     pv0[i] = (200 + Math.random() * 130) * rv(); // 初速 ~200-330：被风吹起的起始速度
     pv1[i] = (520 + Math.random() * 260) * rv(); // 末速 ~520-780：顺风加速飘走
