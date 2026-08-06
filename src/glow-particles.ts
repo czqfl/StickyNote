@@ -423,15 +423,15 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：方向性燃烧速度（模拟点纸，非圆涟漪）----
-  // 像点燃一张纸：燃烧速度按方向/位置分层——
-  //   · 底部点火：火焰向上，优先烧掉上方的纸 → 向上粒子化最快，前沿呈「∩ 山峰」形向上扩张
-  //     （中间先空、边界上移）；随高度升高山峰逐渐变平；
-  //   · 顶部：上方没有纸、只能向下蔓延 → 最慢，且前沿呈「水平缓弧」缓慢下推（波动小、比较平）；
-  //   · 侧边：向中央/四周中速蔓延（介于底部与顶部之间）。
-  // 实现：高度场扫掠模型（单条连续前沿，无圆洞/补丁）——
-  //   T = 基础扫掠(下快上慢, q^1.8) + 底部∩山峰(随高度衰减→顶部变平) + 左右边缘中速吃入
-  //       + 克制幅度的柔和弯曲（几个大缓弯 + 细碎小弯，顶部波动小）。
+  // ---- 消散时间场 T(x,y)：点纸式方向性燃烧（非圆涟漪）----
+  // 像点燃一张纸，四个方向都要起火，但燃烧速度/形态按方向分层——
+  //   · 底部点火：火焰向上、优先烧掉上方的纸 → 向上粒子化最快，前沿呈「尖峰」（Laplace 尖顶，
+  //     非圆滑拱形）向上扩张；峰随高度衰减，越往上越平；
+  //   · 顶部点火：顶边在 tTop 起火后向下慢推 → 最慢，且前沿呈「水平缓弧」（顶部平面，波动小）；
+  //   · 左上/右上角偏下点火：左右两侧从顶角下方起粒子、中速向四周蔓延（介于底部与顶部之间）；
+  //   · 侧边：左右边缘中速吃入。
+  // 实现：底部扫掠(q^1.8,下快上慢) + 尖峰 + 侧边 + 双角点火，顶部取「顶部平面」的 min——
+  //   单条连续前沿，无圆洞/补丁；柔和弯曲（几个大缓弯 + 细碎小弯，幅度克制）。
   // dissolve 语义：T 小=先消散（源点先空）；materialize 用 wipe-T 反向。
   const featherMs = 90; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
@@ -449,11 +449,19 @@ function runGlow(
   const mpx32 = new Uint32Array(mimg.data.buffer); // 32 位写入，仅改最高字节(alpha)
 
   // 方向性燃烧参数（每次播放重新生成 → 每次观感不同）
-  const leadIn = 40;  // 点火前导：极底边不会在 t=0 瞬间全没
-  const peakAmp = 95; // ∩ 山峰强度（ms）：底部中心提前烧（最快）
-  const peakW = 0.15; // ∩ 山峰宽度（w 比例）
-  const sideAmp = 130; // 左右边缘吃入强度（ms）：中速
-  const sideW = 0.13;  // 左右边缘吃入宽度（w 比例）
+  const leadIn = 40; // 点火前导：极底边不会在 t=0 瞬间全没
+  const sweepSpan = 1450; // 底部扫掠时长基数：略大于 wipe，配合顶部平面让总时长回落到 ~1000ms
+  const peakAmp = 150;    // 底部「尖峰」强度（ms）：中线点火提前烧，形成尖顶（非圆滑拱形）
+  const peakHalfW = 0.09; // 尖峰半宽（w 比例，Laplace 尖顶：|x-cx| 指数衰减，顶端尖锐）
+  const sideAmp = 130;    // 左右边缘吃入强度（ms）：中速
+  const sideW = 0.13;     // 左右边缘吃入宽度（w 比例）
+  const cornerAmp = 850;  // 左上/右上角偏下点火强度（ms）：让左右两侧从顶角下方开始消散
+  const cornerW = 0.10;   // 角落点火椭圆 x 半径（w 比例）
+  const cornerH = 0.16;   // 角落点火椭圆 y 半径（h 比例）
+  const lx = 0.08 * w, ly = 0.14 * h; // 左上角偏下点火点
+  const rx = 0.92 * w, ry = 0.14 * h; // 右上角偏下点火点
+  const tTop = 300;   // 顶部平面起火时刻（ms）：顶部边缘此时开始向下慢推
+  const dTop = 2800;  // 顶部平面下推时长基数（ms）：大 = 慢（顶部最慢、水平缓弧）
   const cx = (0.5 + (Math.random() - 0.5) * 0.30) * w; // 底部点火点 x（中线附近随机）
   const noisePhase = Math.random() * 100; // 噪声相位随机 → 每次前沿弯曲不同
 
@@ -484,18 +492,29 @@ function runGlow(
     );
   };
 
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻：高度场扫掠 + 方向性燃烧项
+  // 二维高斯（角落点火用）：中心 (px,py)，x/y 半径按 w/h 归一
+  const gauss2 = (nx: number, ny: number, px: number, py: number, sx: number, sy: number): number =>
+    Math.exp(
+      -Math.pow((nx - px) / (sx * w), 2) - Math.pow((ny - py) / (sy * h), 2),
+    );
+
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻：底部扫掠 + 尖峰 + 侧边 + 双角点火，顶部取平面（min）
   const dissolveTimeAt = (nx: number, ny: number): number => {
     const q = (h - ny) / h; // 0 底 .. 1 顶
-    // 基础扫掠：下快上慢（凸曲线，q 大=顶部更慢）
-    let T = leadIn + (wipe - leadIn) * Math.pow(q, 1.8);
-    // ∩ 山峰：底部中心提前烧（峰随高度衰减 → 顶部变水平）
-    T -= peakAmp * Math.exp(-Math.pow((nx - cx) / (peakW * w), 2)) * Math.pow(1 - q, 0.9);
+    // 底部扫掠：下快上慢（凸曲线，q 大=顶部更慢）
+    let T = leadIn + sweepSpan * Math.pow(q, 1.8);
+    // 底部「尖峰」：中线点火提前烧，Laplace 尖顶（顶端尖锐、两侧快速收窄），峰随高度衰减 → 顶部变水平
+    T -= peakAmp * Math.exp(-Math.abs(nx - cx) / (peakHalfW * w)) * Math.pow(1 - q, 0.85);
     // 侧边：左右边缘提前烧（中速吃入，中部最强、两端弱）
     T -= sideAmp * (Math.exp(-Math.pow(nx / (sideW * w), 2)) + Math.exp(-Math.pow((w - nx) / (sideW * w), 2)))
        * Math.pow(q, 0.75) * Math.pow(1 - q, 0.5);
+    // 左上/右上角偏下点火：让上方与左右两侧都可见地起粒子（不再只有底部在烧）
+    T -= cornerAmp * (gauss2(nx, ny, lx, ly, cornerW, cornerH) + gauss2(nx, ny, rx, ry, cornerW, cornerH));
     // 柔和弯曲（幅度克制）
     T += gentleNoise(nx, ny);
+    // 顶部平面：顶边起火后向下慢推（最慢、水平缓弧）——与底部扫掠取 min，顶部区域由此接管
+    const topPlane = tTop + (1 - q) * dTop;
+    if (topPlane < T) T = topPlane;
     if (T < 0) T = 0;
     else if (T > wipe - featherMs) T = wipe - featherMs;
     return T;
