@@ -1432,7 +1432,7 @@ async fn create_note_window(
         .min_inner_size(220.0, 150.0)
         .position(x, y)
         .visible(false)
-        .shadow(false)
+        .shadow(true)
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
@@ -1479,7 +1479,7 @@ fn ensure_note_window(app: &AppHandle, id: &str) {
             .inner_size(w, h)
             .min_inner_size(220.0, 150.0)
             .visible(false)
-            .shadow(false)
+            .shadow(true)
             .skip_taskbar(true);
         builder = match saved_pos {
             Some((px, py)) => {
@@ -1587,7 +1587,7 @@ fn quick_new_note(app: &AppHandle) {
             .min_inner_size(220.0, 150.0)
             .position(x, y)
             .visible(false)
-            .shadow(false)
+            .shadow(true)
             .skip_taskbar(true)
             .build()
         {
@@ -1657,7 +1657,7 @@ async fn open_history_window(app: AppHandle) -> Result<(), String> {
         .min_inner_size(300.0, 180.0)
         .center()
         .visible(false)
-        .shadow(false)
+        .shadow(true)
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
