@@ -198,13 +198,14 @@ function runErode(
 ): () => void {
   const isDissolve = direction === "dissolve";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  // 内容尺寸（便签本体）：动画开始前窗口尚未扩大，innerWidth/Height 即便签尺寸。
   const w = window.innerWidth;
   const h = window.innerHeight;
 
   // ---- 时序参数 ----
   const wipe = 1000; // 消散 / 成形主体时长 ms（用户要求约 1 秒）
   const featherMs = 90; // 羽化软边时间带宽（越大边缘越柔）
-  const tailMs = isDissolve ? 380 : 120; // 余烬飘散收尾（成形更短）
+  const tailMs = isDissolve ? 520 : 160; // 余烬飘散收尾（延长让火星飘更久；成形更短）
   const duration = wipe + tailMs;
 
   // ---- 蒙版：低分辨率逐像素 alpha（mask-size:100% 100% 上采样柔化）----
@@ -339,9 +340,9 @@ function runErode(
       vec2 c = gl_PointCoord - vec2(0.5);
       float d = length(c);
       float glow = smoothstep(0.5, 0.0, d); // 中心亮、边缘柔化到 0
-      // 白热核心：越年轻(v_core 越大)中心越白，向外过渡到光晕火色——还原原 2D 精灵的
-      // 径向渐变（白热核 + 橙红晕），否则整粒统一白色、加性叠加会饱和成纯白一片。
-      vec3 col = mix(v_color, vec3(1.0, 0.97, 0.9), v_core * pow(glow, 2.0));
+      // 白热核心只在该粒子最出生的极小中心、且最年轻时出现（pow(glow,4) 把白核压成针尖大小）；
+      // 其余区域一律是 v_color 的橙黄火色——否则白核太大、加性叠加会把整片前沿饱和成纯白。
+      vec3 col = mix(v_color, vec3(1.0, 0.96, 0.86), v_core * pow(glow, 4.0));
       float a = glow * v_alpha;
       gl_FragColor = vec4(col, a); // 配合 SRC_ALPHA,ONE 实现 additive 辉光
     }`;
@@ -440,7 +441,7 @@ function runErode(
   }
 
   // 余烬粒子池（SoA + swap-remove），数量随强度大幅提升
-  const maxEmbers = Math.round(360 + density * 1240); // 360 ~ 1600
+  const maxEmbers = Math.round(560 + density * 1640); // 560 ~ 2200（寿命变长需更大池容量）
   const ex = new Float32Array(maxEmbers);
   const ey = new Float32Array(maxEmbers);
   const evx = new Float32Array(maxEmbers);
@@ -465,9 +466,9 @@ function runErode(
     const dir = isDissolve ? 1 : -1;
     evx[i] = nmx * kick * dir + (Math.random() - 0.5) * 30;
     evy[i] = nmy * kick * dir - (46 + Math.random() * 96);
-    elife[i] = 320 + Math.random() * 560;
+    elife[i] = 620 + Math.random() * 820; // 0.62~1.44s：火星飘更久、火焰更持久
     eage[i] = 0;
-    esize[i] = (1.9 + Math.random() * 3.1) * (0.45 + 0.55 * w); // 末段更小
+    esize[i] = (2.6 + Math.random() * 3.8) * (0.5 + 0.5 * w); // 更大更厚；末段更小
     eseed[i] = Math.random() * Math.PI * 2;
   };
 
@@ -647,7 +648,7 @@ function runErode(
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (age < wipe + 60) {
-      const burstN = 2 + Math.round(density * 5); // 每个前沿点爆发 2~7 粒
+      const burstN = 3 + Math.round(density * 7); // 每个前沿点爆发 3~10 粒（火更厚）
       for (let i = 0; i < ecount; i++) {
         const T = emitT[i];
         if (age < T) continue;
@@ -656,7 +657,7 @@ function runErode(
           emitBurst[i] = 1;
           const bn = Math.max(0, Math.round(burstN * emitW[i])); // 末段前沿爆发数大幅减少
           for (let k = 0; k < bn; k++) spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
-        } else if (age < T + 150 && Math.random() < 0.28 * emitW[i]) {
+        } else if (age < T + 380 && Math.random() < 0.5 * emitW[i]) {
           // 前沿过后短暂尾随少量火花（余烬渐熄）；末段同样抑制
           spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
         }
@@ -683,23 +684,26 @@ function runErode(
         ex[i] += (evx[i] + sway) * dt;
         ey[i] += evy[i] * dt;
         const life01 = a / life;
-        const alpha = (1 - life01) * (1 - life01 * 0.3); // 末端更快淡出
+        const alpha = Math.min(1, (1 - life01) * (1 - life01 * 0.15) * 1.25); // 中段更亮更持久、末端才淡出
         if (alpha < 0.02) continue; // 末端极淡：本帧不画（仍留池中）
-        const r = esize[i] * (1 - life01 * 0.55); // 冷却收缩：出生最大最热，离前沿后缩小变暗
-        // 火色（光晕色）：随生命从橙(热)冷却到暗红(冷)连续插值；
-        // 真正的白热核心由着色器按 a_core（年轻度高）* 中心凝聚度生成（替代原 2D 精灵的径向渐变）。
+        const r = esize[i] * (1 - life01 * 0.4); // 冷却收缩更缓：火挂更久、离前沿后缩小变暗
+        // 火色（光晕色）：随生命从亮黄橙(热)冷却到暗红(冷)连续插值。
+        // 蓝色通道在整个生命周期压到 ~0：加性叠加时蓝永不饱和，密集前沿只会叠到黄/橙，
+        // 而不会像原配色(蓝≈0.2~0.46)那样叠多了蓝也顶满 → 整片泛白。
         let cr: number, cg: number, cb: number;
         if (life01 < 0.4) {
           const t = life01 / 0.4;
-          cr = 1; cg = 0.86 + (0.6 - 0.86) * t; cb = 0.46 + (0.2 - 0.46) * t;
+          cr = 1; cg = 0.82 + (0.55 - 0.82) * t; cb = 0.08 * (1 - t); // 热：亮黄橙→橙（更黄更浓；仅出生一丝暖蓝）
         } else if (life01 < 0.75) {
           const t = (life01 - 0.4) / 0.35;
-          cr = 1; cg = 0.6 + (0.35 - 0.6) * t; cb = 0.2 + (0.1 - 0.2) * t;
+          cr = 1; cg = 0.55 + (0.32 - 0.55) * t; cb = 0; // 中：橙（更亮）
         } else {
           const t = (life01 - 0.75) / 0.25;
-          cr = 1 + (0.7 - 1) * t; cg = 0.35 + (0.15 - 0.35) * t; cb = 0.1 + (0.04 - 0.1) * t;
+          cr = 1 + (0.72 - 1) * t; cg = 0.32 + (0.14 - 0.32) * t; cb = 0; // 冷：暗红（略提亮避免太暗淡）
         }
-        const coreW = (1 - life01) * (1 - life01); // 越年轻白热核心越亮，老粒无白核
+        // 白热核心只在该粒子最出生的极短瞬间(life01<0.18)出现，且迅速衰减；
+        // 其余时间 coreW=0 → 粒子完全是橙黄火色，不再整体发白。
+        const coreW = life01 < 0.18 ? Math.pow(1 - life01 / 0.18, 2) : 0;
         glData[p] = ex[i]; glData[p + 1] = ey[i]; glData[p + 2] = r;
         glData[p + 3] = alpha; glData[p + 4] = cr; glData[p + 5] = cg; glData[p + 6] = cb;
         glData[p + 7] = coreW;
