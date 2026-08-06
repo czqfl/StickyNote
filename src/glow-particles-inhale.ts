@@ -21,7 +21,9 @@
 // - 颜色（动态主题采样）：构建便签"区域颜色场"（--bg 底色 + has-bg 背景图 cover 为主导，
 //   底色仅轻量调和），按粒子**生成区域**采样对应背景颜色（背景是什么颜色粒子就是什么颜色），
 //   additive 叠加出辉光，边升边变淡直至自然消散。
-// - 形态/大小：鸿蒙式细微光点（亮核 ~0.6-1.5px + 外晕收紧），寿命 900~1500ms 飘散持久。
+// - 形态/大小：不规则沙粒（非完美圆）——每粒随机自转朝向 + 各向异性被风拉长成短条 +
+//   噪声扰动边缘与表面亮度，尺寸 0.8~4px 偏细小偶有粗砂；寿命 900~1500ms 飘散持久。
+//   （注：本快照仅渲染形态改为沙粒，吸入方向逻辑 normAt/pang 保持冻结不变。）
 //
 // 工程契约（与 erode.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
 // cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出↔关闭"互相打断；
@@ -328,14 +330,19 @@ function runGlow(
     finishEarly();
     return () => {};
   }
-  // 顶点：设备像素坐标 → clip 空间；用 gl_PointSize 当点直径；片元用 gl_PointCoord 画软圆辉光
+  // 顶点：设备像素坐标 → clip 空间；用 gl_PointSize 当点直径；片元用 gl_PointCoord 画
+  // 不规则沙粒（随机自转 + 各向异性拉伸 + 噪声边缘/亮度），替代完美的软圆辉光。
   const VS_SRC = `
     attribute vec2 a_pos;     // 设备像素坐标
     attribute vec2 a_param;   // x=直径(设备px) y=alpha
     attribute vec3 a_color;   // rgb 0~1
+    attribute vec3 a_shape;   // x=自转角 y=各向异性 z=噪声种子
     uniform vec2 u_res;       // canvas 设备尺寸
     varying float v_alpha;
     varying vec3 v_color;
+    varying float v_rot;
+    varying float v_aniso;
+    varying float v_seed;
     void main() {
       vec2 clip = (a_pos / u_res) * 2.0 - 1.0;
       clip.y = -clip.y;       // 设备 y 向下，翻转
@@ -343,17 +350,39 @@ function runGlow(
       gl_PointSize = a_param.x;
       v_alpha = a_param.y;
       v_color = a_color;
+      v_rot = a_shape.x;
+      v_aniso = a_shape.y;
+      v_seed = a_shape.z;
     }`;
   const FS_SRC = `
     precision mediump float;
     varying float v_alpha;
     varying vec3 v_color;
+    varying float v_rot;
+    varying float v_aniso;
+    varying float v_seed;
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
     void main() {
-      vec2 d = gl_PointCoord - vec2(0.5);
-      float r2 = dot(d, d);
-      if (r2 > 0.25) discard;
-      float a = smoothstep(0.25, 0.0, r2);
-      gl_FragColor = vec4(v_color, v_alpha * a);
+      vec2 q = gl_PointCoord - vec2(0.5);
+      q *= 2.0;                                  // [-1,1]
+      float s = sin(v_rot), c = cos(v_rot);
+      vec2 r = vec2(q.x * c - q.y * s, q.x * s + q.y * c); // 旋转到颗粒自身朝向
+      float stretch = mix(1.0, 2.1, v_aniso);    // 沿长轴(x)拉伸
+      float squash  = mix(1.0, 0.5, v_aniso);    // 短轴(y)收窄 → 被风拉成短条
+      r.x /= stretch;
+      r.y /= squash;
+      float rr = length(r);
+      float ang = atan(r.y, r.x);
+      float wob = 0.10 * sin(ang * 3.0 + v_seed) + 0.06 * sin(ang * 7.0 - v_seed * 1.7); // 不规则轮廓
+      float edge = 1.0 + wob;
+      float a0 = 1.0 - smoothstep(edge - 0.5, edge, rr); // 柔和但非圆的边缘
+      if (a0 <= 0.0) discard;
+      float grain = 0.70 + 0.30 * hash(floor(q * 5.0) + v_seed); // 表面颗粒感（粗噪）
+      float core  = 1.0 - smoothstep(0.0, 0.6, rr);              // 中心略亮
+      float bright = grain * (0.82 + 0.18 * core);
+      gl_FragColor = vec4(v_color, v_alpha * a0 * bright);
     }`;
   const compileGL = (type: number, src: string): WebGLShader | null => {
     const sh = gl.createShader(type);
@@ -392,6 +421,7 @@ function runGlow(
   const aPosLoc = gl.getAttribLocation(glProg, "a_pos");
   const aParamLoc = gl.getAttribLocation(glProg, "a_param");
   const aColorLoc = gl.getAttribLocation(glProg, "a_color");
+  const aShapeLoc = gl.getAttribLocation(glProg, "a_shape");
   gl.uniform2f(gl.getUniformLocation(glProg, "u_res"), canvas.width, canvas.height);
   const glBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
@@ -525,11 +555,13 @@ function runGlow(
   const plife = new Float32Array(maxP);
   const page = new Float32Array(maxP);
   const psize = new Float32Array(maxP);
-  const pseed = new Float32Array(maxP);
+  const pseed = new Float32Array(maxP); // 噪声种子（错相，避免整片颗粒同形）
+  const prot = new Float32Array(maxP);  // 颗粒自转朝向
+  const paniso = new Float32Array(maxP); // 各向异性（越高越被风拉长）
   const pr = new Float32Array(maxP); // 粒子颜色 0~1（替代精灵索引，交给 GPU 着色器）
   const pg = new Float32Array(maxP);
   const pb = new Float32Array(maxP);
-  const glData = new Float32Array(maxP * 7); // WebGL 上传缓冲：x,y,size,alpha,r,g,b（设备像素坐标）
+  const glData = new Float32Array(maxP * 10); // 上传缓冲：x,y,size,alpha,r,g,b,rot,aniso,seed（设备像素坐标）
   const psway = new Float32Array(maxP); // 每粒恒定横向漂移速度 px/s（替代逐帧 Math.sin 摆动，省 CPU）
   let pcount = 0;
 
@@ -668,9 +700,12 @@ function runGlow(
     pv1[i] = (520 + Math.random() * 260) * rv(); // 末速 ~520-780：顺风加速飘走
     plife[i] = life;
     page[i] = 0;
-    psize[i] = 1.0 * (0.8 + Math.random() * 0.4); // 亮核 ~0.8-1.2px，大小 ±20%
-    pseed[i] = Math.random() * Math.PI * 2;
-    psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移（替代逐帧 sin 摆动）
+    const r1 = Math.random(), r2 = Math.random();
+    psize[i] = 0.8 + r1 * r2 * 3.2; // 沙粒尺寸 0.8~4.0px，偏细小、偶有粗砂
+    pseed[i] = Math.random() * 100.0;  // 形状/噪声种子（错相）
+    prot[i] = Math.random() * Math.PI * 2; // 颗粒随机自转朝向
+    paniso[i] = Math.random();         // 各向异性：越高被风拉得越长（沙粒条状）
+    psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移
     const [r, g, b] = sampleThemeColor(sx, y); // 采样生成区域的主题色
     pr[i] = r / 255; pg[i] = g / 255; pb[i] = b / 255; // 主题色直接入粒子，GPU 程序化绘制
   };
@@ -821,6 +856,7 @@ function runGlow(
           px[i] = px[last]; py[i] = py[last]; pang[i] = pang[last];
           pv0[i] = pv0[last]; pv1[i] = pv1[last]; plife[i] = plife[last];
           page[i] = page[last]; psize[i] = psize[last]; pseed[i] = pseed[last];
+          prot[i] = prot[last]; paniso[i] = paniso[last];
           pr[i] = pr[last]; pg[i] = pg[last]; pb[i] = pb[last]; psway[i] = psway[last];
         }
         i--;
@@ -829,31 +865,36 @@ function runGlow(
       const speed = pv0[i] + (pv1[i] - pv0[i]) * u * u; // ease-in-quad 柔和加速
       const dx = Math.sin(pang[i]);
       const dy = -Math.cos(pang[i]); // 向上为负 y
-      px[i] += (dx * speed + psway[i]) * dt; // 恒定向漂移（替代逐帧 sin 摆动，省 CPU）
+      px[i] += (dx * speed + psway[i]) * dt; // 恒定向漂移（替代逐帧 sin 摆动，省 CPU）——吸入方向逻辑保持不变
       py[i] += dy * speed * dt;
       const t = 1 - u;
-      const alpha = t * t * globalFade; // 边升边变淡（平方衰减，替代 Math.pow 更省 CPU）
+      const alpha = t * t * globalFade; // 边升边变淡（平方衰减）
       if (alpha < 0.02) continue;
-      const haloR = psize[i] * (1 - u * 0.25) * 1.6; // 亮核 + 外晕（鸿蒙式细光点），略随生命收缩
-      const o = drawCount * 7;
+      const sz = psize[i] * (1 - u * 0.2) * dpr; // 颗粒直径（设备像素），略随生命收缩
+      const o = drawCount * 10;
       glData[o] = px[i] * dpr;          // 设备像素 x
       glData[o + 1] = py[i] * dpr;      // 设备像素 y
-      glData[o + 2] = haloR * 2 * dpr;  // 直径（设备像素）作为点大小
+      glData[o + 2] = sz;               // 直径（设备像素）作为点大小
       glData[o + 3] = alpha;
       glData[o + 4] = pr[i];
       glData[o + 5] = pg[i];
       glData[o + 6] = pb[i];
+      glData[o + 7] = prot[i];          // 自转朝向
+      glData[o + 8] = paniso[i];        // 各向异性
+      glData[o + 9] = pseed[i];         // 噪声种子
       drawCount++;
     }
     if (drawCount > 0) {
       gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, glData.subarray(0, drawCount * 7), gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, glData.subarray(0, drawCount * 10), gl.DYNAMIC_DRAW);
       gl.enableVertexAttribArray(aPosLoc);
-      gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 28, 0);
+      gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 40, 0);
       gl.enableVertexAttribArray(aParamLoc);
-      gl.vertexAttribPointer(aParamLoc, 2, gl.FLOAT, false, 28, 8);
+      gl.vertexAttribPointer(aParamLoc, 2, gl.FLOAT, false, 40, 8);
       gl.enableVertexAttribArray(aColorLoc);
-      gl.vertexAttribPointer(aColorLoc, 3, gl.FLOAT, false, 28, 16);
+      gl.vertexAttribPointer(aColorLoc, 3, gl.FLOAT, false, 40, 16);
+      gl.enableVertexAttribArray(aShapeLoc);
+      gl.vertexAttribPointer(aShapeLoc, 3, gl.FLOAT, false, 40, 28);
       gl.drawArrays(gl.POINTS, 0, drawCount);
     }
 
