@@ -498,9 +498,14 @@ function runErode(
     mctx.putImageData(img, 0, 0);
   };
 
-  // 蒙版替换：先解码（new Image onload）再 set，避免逐帧 dataURL 闪烁
+  // 蒙版替换：先解码（new Image onload）再 set，避免逐帧 dataURL 闪烁。
+  // 关键：用 lastAppliedSeq 跟踪「已应用的最新帧序号」——只丢弃比已应用更旧的帧，
+  // 绝不能用 seq !== maskSeq 丢弃（否则 Image 解码慢于推帧间隔(30ms)时，中间所有帧都会被
+  // 判为"非最新"而丢弃，setMask 直到最后一帧才执行 → materialize 的 mask 永远停在全透明、
+  // 便签被透明 mask 藏住、直到收尾 restoreRoot 才"瞬间出现"，表现为"只有粒子、没有便签"）。
   let lastMaskPush = -1;
-  let maskSeq = 0; // 防乱序：Image 解码异步且不保证按序回调，旧帧晚到会覆盖新帧
+  let maskSeq = 0;
+  let lastAppliedSeq = 0; // 已应用的最大帧序号
   const pushMask = (age: number, force: boolean): void => {
     if (!force && age - lastMaskPush < 30) return; // ~30Hz 更新蒙版即可（羽化边缘平滑）
     lastMaskPush = age;
@@ -508,9 +513,24 @@ function runErode(
     const url = maskCanvas.toDataURL();
     const seq = ++maskSeq;
     const im = new Image();
-    im.onload = () => {
-      if (endedLocal || seq !== maskSeq) return; // 只应用最新一帧，丢弃迟到的旧帧
+    const apply = (): void => {
+      if (endedLocal || seq < lastAppliedSeq) return; // 丢弃比已应用更旧的帧（防乱序回退）
+      lastAppliedSeq = seq;
       setMask(url);
+    };
+    im.onload = apply;
+    im.onerror = () => {
+      // 解码失败兜底：materialize 直接显示本体（清 mask + 还原 opacity），避免卡在空白等看门狗；
+      // dissolve 本体本就可见，mask 仅增强裁切，解码失败可忽略。
+      if (endedLocal || isDissolve || seq < lastAppliedSeq) return;
+      lastAppliedSeq = seq;
+      try {
+        root.style.opacity = "1";
+        root.style.setProperty("-webkit-mask-image", "");
+        root.style.setProperty("mask-image", "");
+      } catch {
+        /* ignore */
+      }
     };
     im.src = url;
   };
