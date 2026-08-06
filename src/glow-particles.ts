@@ -23,7 +23,7 @@
 //   additive 叠加出辉光，边升边变淡直至自然消散。
 // - 形态/大小：鸿蒙式细微光点（亮核 ~0.6-1.5px + 外晕收紧），寿命 900~1500ms 飘散持久。
 //
-// 工程契约（与 erode.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
+// 工程契约（与 flame.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
 // cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出↔关闭"互相打断；
 // 看门狗强制收尾，杜绝动画卡死导致窗口无法关闭/成形。
 
@@ -64,7 +64,7 @@ function restoreRoot(root: HTMLElement): void {
   }
 }
 
-/** 隐藏便签本体（保持“空画面”，供下次呼出从空开始，契约与 erode.ts 一致）。 */
+/** 隐藏便签本体（保持“空画面”，供下次呼出从空开始，契约与 flame.ts 一致）。 */
 function blankRoot(root: HTMLElement): void {
   try {
     root.style.clipPath = "inset(0 0 100% 0)";
@@ -591,7 +591,7 @@ function runGlow(
   const emitRate = peakAlive / avgLife; // 粒子/ms
 
   // ---- mask 裁切：把 T 场逐像素 alpha 渲染到蒙版 canvas，驱动便签平滑消散 ----
-  // （前沿为光滑连续曲线、多起点发起；与 erode.ts 同机制，但无随机破碎）
+  // （前沿为光滑连续曲线、多起点发起；与 flame.ts 同机制，但无随机破碎）
   const setMask = (url: string): void => {
     root.style.setProperty("-webkit-mask-image", `url("${url}")`);
     root.style.setProperty("mask-image", `url("${url}")`);

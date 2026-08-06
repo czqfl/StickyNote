@@ -10,7 +10,7 @@
 //   · 底部起点（1~2 个随机点）：自下向上快速推进；
 //   · 顶部起点（单随机点）：自上向下缓慢推进；
 //   · 两者相向蔓延，在便签中上部附近汇合、界面完全消失；
-//   边缘为光滑连续曲线（去除 fbm 噪声与细碎抖动），无锯齿无断裂——像被风吹散而非被火烧蚀。
+//   边缘为光滑连续曲线（去除 fbm 噪声与细碎抖动），无锯齿无断裂——像被风吹散而非被火焰烧蚀。
 // - 粒子数量随时间递增：前 50% 动画时间消散的粒子少、后 50% 多（粒子化速度较快，
 //   主体粒子集中在动画后半段涌出），粒子寿命长、持续飘散。
 // - 粒子沿「边缘几何法线」剥离飘散：在每个生成点对 T 场求梯度得到边缘法线，
@@ -25,7 +25,7 @@
 //   噪声扰动边缘与表面亮度，尺寸 0.8~4px 偏细小偶有粗砂；寿命 900~1500ms 飘散持久。
 //   （注：本快照仅渲染形态改为沙粒，吸入方向逻辑 normAt/pang 保持冻结不变。）
 //
-// 工程契约（与 erode.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
+// 工程契约（与 flame.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
 // cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出↔关闭"互相打断；
 // 看门狗强制收尾，杜绝动画卡死导致窗口无法关闭/成形。
 
@@ -66,7 +66,7 @@ function restoreRoot(root: HTMLElement): void {
   }
 }
 
-/** 隐藏便签本体（保持“空画面”，供下次呼出从空开始，契约与 erode.ts 一致）。 */
+/** 隐藏便签本体（保持“空画面”，供下次呼出从空开始，契约与 flame.ts 一致）。 */
 function blankRoot(root: HTMLElement): void {
   try {
     root.style.clipPath = "inset(0 0 100% 0)";
@@ -615,7 +615,7 @@ function runGlow(
   const emitRate = peakAlive / avgLife; // 粒子/ms
 
   // ---- mask 裁切：把 T 场逐像素 alpha 渲染到蒙版 canvas，驱动便签平滑消散 ----
-  // （前沿为光滑连续曲线、多起点发起；与 erode.ts 同机制，但无随机破碎）
+  // （前沿为光滑连续曲线、多起点发起；与 flame.ts 同机制，但无随机破碎）
   const setMask = (url: string): void => {
     root.style.setProperty("-webkit-mask-image", `url("${url}")`);
     root.style.setProperty("mask-image", `url("${url}")`);

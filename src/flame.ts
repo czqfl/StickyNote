@@ -1,14 +1,14 @@
-// 便签「侵蚀消散」动画：烧纸 / 酸蚀金属式逐像素消散（与火焰式 dissolve/summon 正交的新效果）
+// 便签「火焰消散」动画：火焰式逐像素消散（像真实火舌舔过纸面与金属；与粒子光效 dissolve/summon 为两套独立效果）
 // ----------------------------------------------------------------------------
 // 触发：关闭窗口 / 呼出窗口时播放（与火焰二选一，由设置 particle_mode 决定）。
 //
 // 效果（对齐用户需求）：
 // - 从底部开始向上消散，但消散边界**不是水平直线**——边缘呈锯齿状 / 波浪状 / 破碎状，
-//   像火焰烧纸、酸蚀金属；
+//   像真实火焰舔过纸面与金属；
 // - 同一水平线上不同位置的消散进度有随机差异（±200ms），有的已消散到中部、有的还在底部，
 //   形成错落有致的节奏；
 // - 消散起点不止整条底边：还在底部随机布置 2~3 个「种子点」，像墨水滴在宣纸上一样
-//   向四周扩散（不规则圆 / 椭圆），与底部推进前沿取 min 融合成多前沿侵蚀；
+//   向四周扩散（不规则圆 / 椭圆），与底部推进前沿取 min 融合成多前沿火焰；
 // - 消散边界带**羽化模糊**（真正的逐像素软边，不是硬切）；
 // - 整体持续约 1 秒，配合整体透明度从 100% 渐变到 0%（末端淡出）。
 //
@@ -21,37 +21,37 @@
 //   -webkit-mask-image；mask-size:100% 100% 上采样 → 低分辨率蒙版自动进一步柔化羽化。
 // - 蒙版用「先解码再替换」（new Image onload 后才 set）避免逐帧 dataURL 闪烁；
 // - 透明度淡出：root.style.opacity 随全局进度 1→0（消散）/ 0→1（成形）；
-// - 余烬粒子：canvas 覆盖层上，侵蚀前沿处的发射点向上飘出暖色火星，边飘边淡出，
-//   让「烧纸」更有质感（独立元素，不随便签本体一起变透明）。
+// - 火焰覆盖层：canvas 上以连续火舌场（见 VERT/FRAG 着色器）在燃烧前沿处舔出分层火焰，
+//   半透明、无离散颗粒（独立元素，不随便签本体一起变透明）。
 // - 关闭(dissolve)与呼出(materialize)互为倒放：dissolve 底部向上消失，
 //   materialize 顶部向下成形（用 Tm = wipe - T 反转同一时间场）。
 
-let eroding = false;
+let flaming = false;
 let materializing = false;
-/** 动画代次：每次 runErode 启动 +1。上一轮动画遗留的延时清理（cleanupAfterHide）凭此作废，
+/** 动画代次：每次 runFlame 启动 +1。上一轮动画遗留的延时清理（cleanupAfterHide）凭此作废，
  *  避免快速呼出时把正在播放的新动画便签裁掉/隐藏（见 cleanupAfterHide 守卫）。 */
-let erodeGen = 0;
+let flameGen = 0;
 
-/** 当前侵蚀动画的“立即中止”句柄（由 runErode 注册；cancelErode 调用）。
+/** 当前火焰动画的“立即中止”句柄（由 runFlame 注册；cancelFlame 调用）。
  *  中止 = 停帧 + 复原页面（保持可见，供“呼出打断关闭”等快速切换）。 */
-let cancelErodeFn: (() => void) | null = null;
+let cancelFlameFn: (() => void) | null = null;
 
-/** 立即中止侵蚀动画并复原页面（关闭动画开始前调用，避免与呼出动画同时改 mask/透明度；
+/** 立即中止火焰动画并复原页面（关闭动画开始前调用，避免与呼出动画同时改 mask/透明度；
  *  呼出打断关闭时也调用——此时不触发 onDone，窗口保持显示）。 */
-export function cancelErode(): void {
-  const c = cancelErodeFn;
-  cancelErodeFn = null;
+export function cancelFlame(): void {
+  const c = cancelFlameFn;
+  cancelFlameFn = null;
   if (c) {
     c();
     return;
   }
   // 兜底：无注册句柄时（理论不会出现）直接复原
-  if (!eroding && !materializing) return;
-  eroding = false;
+  if (!flaming && !materializing) return;
+  flaming = false;
   materializing = false;
   const root = document.querySelector(".note-window") as HTMLElement | null;
   if (root) restoreRoot(root);
-  document.querySelector(".erode-canvas")?.remove();
+  document.querySelector(".flame-canvas")?.remove();
 }
 
 /** 复原便签本体样式（mask / 透明度 / 阴影 / 裁剪全部还原）。 */
@@ -80,66 +80,66 @@ function blankRoot(root: HTMLElement): void {
   }
 }
 
-/** 请求播放「侵蚀消散」关闭动画；onDone 在动画完全结束后调用（用于真正关闭窗口）。 */
-export function requestErodeDissolveClose(onDone: () => void, particleDensity = 50): void {
+/** 请求播放「火焰消散」关闭动画；onDone 在动画完全结束后调用（用于真正关闭窗口）。 */
+export function requestFlameDissolveClose(onDone: () => void, particleDensity = 50): void {
   const root = document.querySelector(".note-window") as HTMLElement | null;
-  if (!root || eroding) {
+  if (!root || flaming) {
     onDone();
     return;
   }
-  eroding = true;
+  flaming = true;
   let done = false;
   let aborted = false;
   let stopRun: (() => void) | null = null;
   const safeDone = () => {
     if (done) return;
     done = true;
-    eroding = false;
-    cancelErodeFn = null;
+    flaming = false;
+    cancelFlameFn = null;
     onDone();
   };
   const watchdog = window.setTimeout(safeDone, 4000);
-  cancelErodeFn = () => {
+  cancelFlameFn = () => {
     if (aborted) return;
     aborted = true;
     window.clearTimeout(watchdog);
     if (stopRun) stopRun();
     done = true; // 阻止 onDone：finish() 不会被调用，窗口保持显示
-    eroding = false;
+    flaming = false;
   };
   try {
-    stopRun = runErode(root, "dissolve", particleDensity, () => {
+    stopRun = runFlame(root, "dissolve", particleDensity, () => {
       window.clearTimeout(watchdog);
       safeDone();
     });
   } catch (e) {
-    console.error("侵蚀消散动画异常:", e);
+    console.error("火焰消散动画异常:", e);
     window.clearTimeout(watchdog);
     safeDone();
   }
 }
 
-/** 播放「侵蚀成形」呼出动画（关闭的倒放：顶部向下成形）；收尾自动复原页面。 */
-export function playErodeMaterialize(root: HTMLElement, particleDensity = 50): void {
-  // 强制接管：若已有侵蚀动画在播放（快速呼出时上一轮动画未收尾、materializing 残留），
+/** 播放「火焰成形」呼出动画（关闭的倒放：顶部向下成形）；收尾自动复原页面。 */
+export function playFlameMaterialize(root: HTMLElement, particleDensity = 50): void {
+  // 强制接管：若已有火焰动画在播放（快速呼出时上一轮动画未收尾、materializing 残留），
   // 先取消旧的再启动新的，杜绝「呼出被静默拒绝 → 窗口空画面永久卡死」。
-  if (materializing || eroding) cancelErode();
+  if (materializing || flaming) cancelFlame();
   materializing = true;
   let aborted = false;
   let stopRun: (() => void) | null = null;
-  cancelErodeFn = () => {
+  cancelFlameFn = () => {
     if (aborted) return;
     aborted = true;
     if (stopRun) stopRun();
     materializing = false;
   };
   try {
-    stopRun = runErode(root, "materialize", particleDensity, () => {
-      /* materialize 收尾在 runErode 内自行复原，无需额外 onDone */
+    stopRun = runFlame(root, "materialize", particleDensity, () => {
+      /* materialize 收尾在 runFlame 内自行复原，无需额外 onDone */
     });
   } catch (e) {
-    console.error("侵蚀成形动画异常:", e);
-    cancelErodeFn = null;
+    console.error("火焰成形动画异常:", e);
+    cancelFlameFn = null;
     materializing = false;
     restoreRoot(root);
   }
@@ -190,16 +190,16 @@ interface Seed {
 }
 
 /**
- * 播放一次侵蚀动画。
+ * 播放一次火焰动画。
  * @param direction "dissolve"=关闭消散（底部向上）；"materialize"=呼出成形（顶部向下，倒放）
  */
-function runErode(
+function runFlame(
   root: HTMLElement,
   direction: "dissolve" | "materialize",
   particleDensity: number,
   onDone: () => void,
 ): () => void {
-  const myGen = ++erodeGen; // 本动画实例代次：作废上一轮遗留的延时清理
+  const myGen = ++flameGen; // 本动画实例代次：作废上一轮遗留的延时清理
   const isDissolve = direction === "dissolve";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   // 内容尺寸（便签本体）：动画开始前窗口尚未扩大，innerWidth/Height 即便签尺寸。
@@ -209,7 +209,7 @@ function runErode(
   // ---- 时序参数 ----
   const wipe = 1000; // 消散 / 成形主体时长 ms（用户要求约 1 秒）
   const featherMs = 90; // 羽化软边时间带宽（越大边缘越柔）
-  const tailMs = isDissolve ? 520 : 160; // 余烬飘散收尾（延长让火星飘更久；成形更短）
+  const tailMs = isDissolve ? 520 : 160; // 收尾余时（关闭时让火舌多停留片刻；成形更短）
   const duration = wipe + tailMs;
 
   // ---- 蒙版：低分辨率逐像素 alpha（mask-size:100% 100% 上采样柔化）----
@@ -253,7 +253,7 @@ function runErode(
   const dissolveTimeAt = (nx: number, ny: number): number => {
     // 底部向上基准：底部 leadIn，顶部 baseMax
     let base = leadIn + ((h - ny) / h) * (baseMax - leadIn);
-    // 种子点扩散场（不规则椭圆），取 min → 多前沿侵蚀 / 局部破洞
+    // 种子点扩散场（不规则椭圆），取 min → 多前沿火焰 / 局部破洞
     for (let i = 0; i < seedCount; i++) {
       const s = seeds[i];
       const dx = (nx - s.x) * s.invRx;
@@ -280,9 +280,9 @@ function runErode(
     }
   }
 
-  // ---- 余烬粒子覆盖层 canvas ----
+  // ---- 火焰覆盖层 canvas ----
   const canvas = document.createElement("canvas");
-  canvas.className = "erode-canvas";
+  canvas.className = "flame-canvas";
   canvas.width = Math.max(1, Math.round(w * dpr));
   canvas.height = Math.max(1, Math.round(h * dpr));
   canvas.style.position = "fixed";
@@ -294,7 +294,7 @@ function runErode(
   canvas.style.pointerEvents = "none";
   canvas.style.transform = "translateZ(0)";
   document.body.appendChild(canvas);
-  // ---- 余烬渲染：WebGL 点精灵（单次 draw call + GPU additive），替代 Canvas2D 逐粒 drawImage ----
+  // ---- 火焰渲染：全屏 quad + 火焰场片元着色器（见 VERT/FRAG） ----
   const gl = canvas.getContext("webgl", {
     alpha: true,
     premultipliedAlpha: false,
@@ -369,7 +369,7 @@ function runErode(
     gl.shaderSource(sh, src);
     gl.compileShader(sh);
     if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-      console.error("erode 火焰着色器编译失败:", gl.getShaderInfoLog(sh));
+      console.error("flame 火焰着色器编译失败:", gl.getShaderInfoLog(sh));
       return null;
     }
     return sh;
@@ -386,7 +386,7 @@ function runErode(
   gl.attachShader(program, fs);
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    console.error("erode 火焰着色器链接失败:", gl.getProgramInfoLog(program));
+    console.error("flame 火焰着色器链接失败:", gl.getProgramInfoLog(program));
     canvas.remove();
     finishEarly();
     return () => {};
@@ -548,9 +548,9 @@ function runErode(
   }
 
   const cleanupAfterHide = () => {
-    // 代次守卫：若已启动新动画（erodeGen 改变），本实例的延时清理作废，
+    // 代次守卫：若已启动新动画（flameGen 改变），本实例的延时清理作废，
     // 否则会把正在播放的新动画便签裁掉/隐藏（快速关闭后立刻呼出时会触发）。
-    if (myGen !== erodeGen) return;
+    if (myGen !== flameGen) return;
     stopLoop();
     // 保持"空画面"供下次呼出（契约同 dissolve.ts cleanup）
     blankRoot(root);
@@ -564,16 +564,16 @@ function runErode(
     } catch {
       /* ignore */
     }
-    eroding = false;
+    flaming = false;
   };
 
   const finishMaterialize = () => {
     stopLoop();
-    if (myGen !== erodeGen) return; // 已被新动画接管：勿复位其样式
+    if (myGen !== flameGen) return; // 已被新动画接管：勿复位其样式
     materializing = false;
     // 让“便签已完整显现”的最后一帧先提交，再移除覆盖层与复位样式，避免收尾闪一下。
     requestAnimationFrame(() => {
-      if (myGen !== erodeGen) return; // 期间已启动新动画：勿复位其样式
+      if (myGen !== flameGen) return; // 期间已启动新动画：勿复位其样式
       try {
         canvas.remove();
       } catch {
@@ -683,7 +683,7 @@ function runErode(
     }
   }, duration + 600);
 
-  // 返回“立即中止”句柄（cancelErode 调用）：停帧、移除覆盖层、复原页面样式。
+  // 返回“立即中止”句柄（cancelFlame 调用）：停帧、移除覆盖层、复原页面样式。
   // 中止 = 保持窗口可见（呼出打断关闭 / 关闭打断呼出都走这里）。
   return () => {
     stopLoop();

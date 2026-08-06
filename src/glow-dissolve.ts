@@ -15,7 +15,7 @@
 //   边升边变暗变淡直至完全消失，全程保持发光质感。
 // - 可配（见常量）：主体时长 ~780ms、粒子数 200-400、大小 2-5px、区域宽 ~65px、角度 ±20°。
 //
-// 实现（与 erode.ts 同一套契约）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none、
+// 实现（与 flame.ts 同一套契约）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none、
 // additive 辉光）；便签本体用 clip-path 多边形沿不规则前沿逐步裁掉（边界以上可见）；
 // 提供 cancelGlowDissolve() 立即中止（停帧+复原页面、不触发 onDone），供“呼出打断关闭”等
 // 快速切换；看门狗强制收尾，杜绝动画卡死导致窗口无法关闭。
@@ -58,7 +58,7 @@ function restoreRoot(root: HTMLElement): void {
   }
 }
 
-/** 隐藏便签本体（保持“空画面”，供下次呼出从空开始，契约与 erode.ts 一致）。 */
+/** 隐藏便签本体（保持“空画面”，供下次呼出从空开始，契约与 flame.ts 一致）。 */
 function blankRoot(root: HTMLElement): void {
   try {
     root.style.clipPath = "inset(0 0 100% 0)";
@@ -308,7 +308,7 @@ function runGlowDissolve(
   };
 
   function finishEarly(): void {
-    // 无法渲染时直接收尾：隐藏窗口（契约同 erode）
+    // 无法渲染时直接收尾：隐藏窗口（契约同 flame）
     stopLoop();
     blankRoot(root);
     onDone();
