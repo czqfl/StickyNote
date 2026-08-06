@@ -1,21 +1,21 @@
-// 便签「粒子光效」统一动画：鸿蒙通知删除同款 —— 界面碎裂成大量发光微粒，
-// 区域化朝相近方向加速上升、边升边淡出，全程带光晕辉光。
+// 便签「粒子吸入」动画（冻结快照）：本文件由 src/glow-particles.ts 于 2026-08-06 拆分冻结而来，
+// 专供设置项「粒子吸入」(inhale) 模式使用，后续不再改动。
+// 视觉：粒子沿消散前沿几何法线（向内汇聚方向）剥离飘散——即用户口中“向内吸”的效果。
 // ----------------------------------------------------------------------------
-// 触发：关闭窗口（dissolve）/ 呼出窗口（materialize，互为倒放）。
+// 触发：关闭窗口（dissolve，顶部+底部双起点相向消散）/ 呼出窗口（materialize，互为倒放）。
 // 两个方向**共用同一套粒子系统** → 粒子的形态 / 大小 / 颜色表现完全一致（仅运动方向相反）。
 //
-// 视觉要点（波峰消散 · 四边汇合）：
-// - 四边随机消散：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切，时间场由「四边随机源点」
-//   涟漪式向外扩散叠加而成——底部 / 顶部 / 左 / 右 各随机布点，每点带随机发起时刻与随机速度，
-//   使每次消散的波前形态都不同；四个方向的消散前沿最终在中央汇合、界面完全消失。
-// - 下方快上方慢：底部源点 scale 小（前沿快）、顶部源点 scale 大（前沿慢），左右中等——
-//   整体呈「下消上慢」的非对称推进，模拟真实物理的下坠消散感。
-// - 底部波峰（∩ 形）：底部仅在中线附近放「快源」，两侧不放快源 → 中线附近先空、边界上移（高），
-//   两侧源点远、最后才空、边界下垂（低），便签底边自然形成「中间高、两边低」的波峰拱形；
-//   边缘为光滑连续曲线（不叠加噪声），无锯齿无断裂。
-// - 粒子一律向上飘：粒子生成后方向**锁死为向上**（pang≈0 ± 发散角），仅保留轻微横向抖动，
-//   不再沿边缘法线四散——所有微粒都朝上方升起、边升边淡出，呈现“被托起升空”的消散感。
-// - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散，不破坏整体上升一致性。
+// 视觉要点（风吹风格）：
+// - 双起点消散形态：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切——
+//   · 底部起点（1~2 个随机点）：自下向上快速推进；
+//   · 顶部起点（单随机点）：自上向下缓慢推进；
+//   · 两者相向蔓延，在便签中上部附近汇合、界面完全消失；
+//   边缘为光滑连续曲线（去除 fbm 噪声与细碎抖动），无锯齿无断裂——像被风吹散而非被火烧蚀。
+// - 粒子数量随时间递增：前 50% 动画时间消散的粒子少、后 50% 多（粒子化速度较快，
+//   主体粒子集中在动画后半段涌出），粒子寿命长、持续飘散。
+// - 粒子沿「边缘几何法线」剥离飘散：在每个生成点对 T 场求梯度得到边缘法线，
+//   粒子紧贴边缘线上持续剥离、沿法线方向（远离未消散实体）向外飘走，确保边缘与粒子无视觉断层。
+// - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 法线方向 ±10° 角抖动，不破坏整体风向一致性。
 // - 加速飘散：ease-in-quad 二次缓动，初速 ~200-330px/s → 末速 ~520-780px/s（逐粒子 ±20%），
 //   附加极轻微横向摆动，柔和不"嗖"地飞走。
 // - 颜色（动态主题采样）：构建便签"区域颜色场"（--bg 底色 + has-bg 背景图 cover 为主导，
@@ -27,25 +27,25 @@
 // cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出↔关闭"互相打断；
 // 看门狗强制收尾，杜绝动画卡死导致窗口无法关闭/成形。
 
-let glowActive = false;
-/** 动画代次：每次 runGlow 启动 +1。上一轮动画遗留的延时清理（cleanupAfterHide）凭此作废，
+let inhaleActive = false;
+/** 动画代次：每次 runInhale 启动 +1。上一轮动画遗留的延时清理（cleanupAfterHide）凭此作废，
  *  避免快速呼出时把正在播放的新动画便签裁掉/隐藏（见 cleanupAfterHide 守卫）。 */
-let glowGen = 0;
+let inhaleGen = 0;
 
-/** 当前粒子动画的“立即中止”句柄（由 runGlow 注册；cancelGlowParticles 调用）。 */
-let cancelGlowFn: (() => void) | null = null;
+/** 当前粒子动画的“立即中止”句柄（由 runInhale 注册；cancelInhaleParticles 调用）。 */
+let cancelInhaleFn: (() => void) | null = null;
 
 /** 立即中止粒子动画并复原页面（呼出打断关闭 / 关闭打断呼出时调用——不触发 onDone，窗口保持显示）。 */
-export function cancelGlowParticles(): void {
-  const c = cancelGlowFn;
-  cancelGlowFn = null;
+export function cancelInhaleParticles(): void {
+  const c = cancelInhaleFn;
+  cancelInhaleFn = null;
   if (c) {
     c();
     return;
   }
   // 兜底：无注册句柄时（理论不会出现）直接复原页面
-  if (!glowActive) return;
-  glowActive = false;
+  if (!inhaleActive) return;
+  inhaleActive = false;
   const root = document.querySelector(".note-window") as HTMLElement | null;
   if (root) restoreRoot(root);
   document.querySelector(".glow-particles-canvas")?.remove();
@@ -78,31 +78,31 @@ function blankRoot(root: HTMLElement): void {
 }
 
 /** 请求播放「粒子光效消散」关闭动画（自底向上）；onDone 在动画完全结束后调用（真正关闭窗口）。 */
-export function requestGlowDissolveClose(onDone: () => void, particleDensity = 50): void {
+export function requestInhaleDissolveClose(onDone: () => void, particleDensity = 50): void {
   const root = document.querySelector(".note-window") as HTMLElement | null;
-  if (!root || glowActive) {
+  if (!root || inhaleActive) {
     onDone();
     return;
   }
-  glowActive = true;
+  inhaleActive = true;
   let done = false;
   let aborted = false;
   let stopRun: (() => void) | null = null;
   const safeDone = () => {
     if (done) return;
     done = true;
-    glowActive = false;
-    cancelGlowFn = null;
+    inhaleActive = false;
+    cancelInhaleFn = null;
     onDone();
   };
   const watchdog = window.setTimeout(safeDone, 4000);
-  cancelGlowFn = () => {
+  cancelInhaleFn = () => {
     if (aborted) return;
     aborted = true;
     window.clearTimeout(watchdog);
     if (stopRun) stopRun();
     done = true; // 阻止 onDone：finish() 不会被调用，窗口保持显示
-    glowActive = false;
+    inhaleActive = false;
   };
   try {
     stopRun = runGlow(root, "dissolve", particleDensity, () => {
@@ -117,18 +117,18 @@ export function requestGlowDissolveClose(onDone: () => void, particleDensity = 5
 }
 
 /** 播放「粒子光效成形」呼出动画（自顶向下，关闭的倒放）；收尾自动复原页面。 */
-export function playGlowMaterialize(root: HTMLElement, particleDensity = 50): void {
-  // 强制接管：若已有粒子光效动画在播放（快速呼出时上一轮动画未收尾、glowActive 残留），
+export function playInhaleMaterialize(root: HTMLElement, particleDensity = 50): void {
+  // 强制接管：若已有粒子吸入动画在播放（快速呼出时上一轮动画未收尾、inhaleActive 残留），
   // 先取消旧的再启动新的，杜绝「呼出被静默拒绝 → 窗口空画面永久卡死」。
-  if (glowActive) cancelGlowParticles();
-  glowActive = true;
+  if (inhaleActive) cancelInhaleParticles();
+  inhaleActive = true;
   let aborted = false;
   let stopRun: (() => void) | null = null;
-  cancelGlowFn = () => {
+  cancelInhaleFn = () => {
     if (aborted) return;
     aborted = true;
     if (stopRun) stopRun();
-    glowActive = false;
+    inhaleActive = false;
   };
   try {
     stopRun = runGlow(root, "materialize", particleDensity, () => {
@@ -136,8 +136,8 @@ export function playGlowMaterialize(root: HTMLElement, particleDensity = 50): vo
     });
   } catch (e) {
     console.error("粒子光效成形动画异常:", e);
-    cancelGlowFn = null;
-    glowActive = false;
+    cancelInhaleFn = null;
+    inhaleActive = false;
     restoreRoot(root);
   }
 }
@@ -293,7 +293,7 @@ function runGlow(
   particleDensity: number,
   onDone: () => void,
 ): () => void {
-  const myGen = ++glowGen; // 本动画实例代次：作废上一轮遗留的延时清理
+  const myGen = ++inhaleGen; // 本动画实例代次：作废上一轮遗留的延时清理
   const isDissolve = direction === "dissolve";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = window.innerWidth;
@@ -422,14 +422,12 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：四边随机源点「涟漪式」向外扩散，最终中央汇合 ----
-  // 每次播放随机在 底/顶/左/右 各布若干源点：源点位置(x/y)、发起时刻、速度都随机
-  // → 每次消散的波前形态都不同；四方向的消散前沿最终在便签中央汇合、整体消失。
-  // 速度不对称（下快上慢）：底部 scale 小（前沿快）、顶部 scale 大（前沿慢）、左右中等——
-  // 模拟真实物理的下坠消散感。
-  // 底部波峰（∩ 形）：底部只在「中线附近」放快源（≈1 个，x 紧贴中心），两侧不放快源 →
-  // 中线附近先空、边界上移（高），而底部两侧离任何源都远、最后才空、边界下垂（低），
-  // 便签底边自然形成「中间高、两边低」的波峰拱形。
+  // ---- 消散时间场 T(x,y)：从若干随机源点「涟漪式」向外扩散 ----
+  // 取代旧方案（顶/底边整条边同时 T=0 发起 → 看起来像全底边齐发、缺乏明确起源点）。
+  // 现在每次播放随机选 1~2 个底部源点（向上快速）+ 1 个顶部源点（向下缓慢）：
+  // 每源 T 以「到该源点的归一化距离」为主驱动，scale 控制前沿速度（大=慢、小=快），
+  // 使底部快速上行、顶部缓慢下压，二者相向蔓延、中央汇合；
+  // 源点位置(x/y)、发起时刻都随机 → 每次消散的波前形态略有不同，随机性足且边缘保持光滑。
   // dissolve 语义：T 小=先消散（源点先空）；materialize 用 Tm=wipe-T 反向 → 源点最后成形。
   const featherMs = 90; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
@@ -452,41 +450,23 @@ function runGlow(
   const diag = Math.hypot(w, h);
   interface DissolveSource { x: number; y: number; t0: number; scale: number }
   const sources: DissolveSource[] = [];
-  // 底部：1 个「中线附近」快源（形成底部波峰的“高”——中线先空、边界上移）；
-  // scale 最小（最快），使底部整体快于顶部。x 紧贴中心 ±一小段，保证“中间高”。
+  // 底部源：1~2 个随机点，自下向上快速推进（维持原观感）
+  const nBottom = 1 + (Math.random() < 0.35 ? 1 : 0);
+  for (let s = 0; s < nBottom; s++) {
+    sources.push({
+      x: (0.12 + Math.random() * 0.76) * w, // 底部随机 x（偏中间，避免贴死角落）
+      y: h - Math.random() * 0.18 * h,       // 底部 0~18% 高度内随机（波峰随之高低错落）
+      t0: Math.random() * 0.10 * wipe,       // 各源发起时刻略错开，避免齐发
+      scale: 1.02,                           // 底部：较快（scale 越小前沿越快）
+    });
+  }
+  // 顶部源：单一随机点，自上向下缓慢推进（与底部相向、中央汇合）
   sources.push({
-    x: (0.5 + (Math.random() - 0.5) * 0.30) * w, // 中线附近 ±15%
-    y: h - Math.random() * 0.16 * h,               // 底部 0~16% 高度内随机
-    t0: Math.random() * 0.08 * wipe,
-    scale: 0.98,                                  // 底部：最快
-  });
-  // 顶部：1 个随机点，scale 最大（最慢）→ 上方消散慢
-  sources.push({
-    x: (0.12 + Math.random() * 0.76) * w,
-    y: Math.random() * 0.16 * h,
+    x: (0.12 + Math.random() * 0.76) * w, // 顶部随机 x
+    y: Math.random() * 0.18 * h,          // 顶部 0~18% 高度内随机
     t0: Math.random() * 0.06 * wipe,
-    scale: 1.6,                                   // 顶部：最慢（与底部 0.98 形成明显速度差）
+    scale: 1.55,                          // 顶部：较慢（scale 越大前沿越慢，与底部 1.02 形成速度差）
   });
-  // 左侧：1~2 个随机点，中等速度
-  const nLeft = 1 + (Math.random() < 0.5 ? 1 : 0);
-  for (let s = 0; s < nLeft; s++) {
-    sources.push({
-      x: Math.random() * 0.16 * w,
-      y: (0.12 + Math.random() * 0.76) * h,
-      t0: Math.random() * 0.08 * wipe,
-      scale: 1.25,
-    });
-  }
-  // 右侧：1~2 个随机点，中等速度
-  const nRight = 1 + (Math.random() < 0.5 ? 1 : 0);
-  for (let s = 0; s < nRight; s++) {
-    sources.push({
-      x: w - Math.random() * 0.16 * w,
-      y: (0.12 + Math.random() * 0.76) * h,
-      t0: Math.random() * 0.08 * wipe,
-      scale: 1.25,
-    });
-  }
 
   // 返回 CSS 坐标 (nx,ny) 的消散时刻：取「最近源点」的扩散时刻
   const dissolveTimeAt = (nx: number, ny: number): number => {
@@ -513,10 +493,22 @@ function runGlow(
     }
   }
 
-  // ---- 粒子漂移方向：一律「向上」飘散 ----
-  // 不再沿边缘法线四散：粒子生成后方向锁死为竖直向上（pang=0），仅保留 ±35° 发散角
-  // 与轻微恒定向漂移（psway），使所有微粒都朝上方升起、边升边淡出——“被托起升空”的消散感。
-  // pang 为「与垂直向上夹角」：0=向上，正值向右；与粒子更新公式 dx=sin(pang)/dy=-cos(pang) 一致。
+  // ---- 粒子漂移方向：沿「边缘几何法线」——对时间场 T 求梯度得到消散前沿法线，
+  //   粒子沿「远离未消散实体」的方向（即 -∇T）剥离飘走，像被风吹离边缘。
+  //   返回「与垂直向上夹角」(pang)：0=向上，正值向右；与粒子更新公式 dx=sin(pang)/dy=-cos(pang) 一致。
+  const normalEps = 2;
+  const normAt = (x: number, y: number): number => {
+    const dTx = dissolveTimeAt(x + normalEps, y) - dissolveTimeAt(x - normalEps, y);
+    const dTy = dissolveTimeAt(x, y + normalEps) - dissolveTimeAt(x, y - normalEps);
+    // -∇T 指向已消散（实体之外）的方向；归一化为单位向量 (gx, gy)，gy 向下为正
+    let gx = -dTx;
+    let gy = -dTy;
+    const len = Math.hypot(gx, gy);
+    if (len < 1e-6) { gx = 0; gy = -1; } // 退化时默认向上
+    else { gx /= len; gy /= len; }
+    // 由方向向量换算成 pang：dx=sin(pang)=gx, dy=-cos(pang)=gy → cos(pang)=-gy
+    return Math.atan2(gx, -gy);
+  };
 
   // ---- 粒子池（SoA + swap-remove）----
   // 采用「连续发射 + 峰值存活上限」模型：全局发射率由峰值存活数换算，池子只需容纳
@@ -670,7 +662,7 @@ function runGlow(
     const sx = x + (Math.random() - 0.5) * (w / ecx);
     px[i] = sx;
     py[i] = y + (Math.random() - 0.5) * 4;
-    pang[i] = (Math.random() - 0.5) * ((70 * Math.PI) / 180); // 一律向上（pang=0 为竖直向上）±35° 发散，不再沿边缘法线
+    pang[i] = normAt(x, y) + (Math.random() - 0.5) * ((10 * Math.PI) / 180); // 沿边缘法线 ±10° 抖动
     const rv = () => 0.8 + Math.random() * 0.4; // 速度 ±20% 随机差异
     pv0[i] = (200 + Math.random() * 130) * rv(); // 初速 ~200-330：被风吹起的起始速度
     pv1[i] = (520 + Math.random() * 260) * rv(); // 末速 ~520-780：顺风加速飘走
@@ -717,15 +709,15 @@ function runGlow(
       onDone();
     } else {
       restoreRoot(root);
-      glowActive = false;
+      inhaleActive = false;
       onDone();
     }
   }
 
   const cleanupAfterHide = () => {
-    // 代次守卫：若已启动新动画（glowGen 改变），本实例的延时清理作废，
+    // 代次守卫：若已启动新动画（inhaleGen 改变），本实例的延时清理作废，
     // 否则会把正在播放的新动画便签裁掉/隐藏（快速关闭后立刻呼出时会触发）。
-    if (myGen !== glowGen) return;
+    if (myGen !== inhaleGen) return;
     stopLoop();
     blankRoot(root); // 保持“空画面”供下次呼出
     try {
@@ -733,16 +725,16 @@ function runGlow(
     } catch {
       /* ignore */
     }
-    glowActive = false;
+    inhaleActive = false;
   };
 
   const finishMaterialize = () => {
     stopLoop();
-    if (myGen !== glowGen) return; // 已被新动画接管：勿复位其样式
-    glowActive = false;
+    if (myGen !== inhaleGen) return; // 已被新动画接管：勿复位其样式
+    inhaleActive = false;
     // 让“便签已完整显现”的最后一帧先提交，再移除覆盖层与复位样式，避免收尾闪一下。
     requestAnimationFrame(() => {
-      if (myGen !== glowGen) return; // 期间已启动新动画：勿复位其样式
+      if (myGen !== inhaleGen) return; // 期间已启动新动画：勿复位其样式
       try {
         canvas.remove();
       } catch {

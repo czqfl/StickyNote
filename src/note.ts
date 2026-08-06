@@ -22,6 +22,7 @@ import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
 import { requestErodeDissolveClose, playErodeMaterialize, cancelErode } from "./erode";
 import { requestGlowDissolveClose, playGlowMaterialize, cancelGlowParticles } from "./glow-particles";
+import { requestInhaleDissolveClose, playInhaleMaterialize, cancelInhaleParticles } from "./glow-particles-inhale";
 import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
 import { applyPanelBackground } from "./panel-bg";
 import {
@@ -859,6 +860,7 @@ export function mountNoteApp(noteId: string, preset = "") {
           if (seq !== summonSeq || closing || deleted) return;
           const intensity = s.particle_intensity ?? 50;
           if (s.particle_mode === "erode") playErodeMaterialize(noteWindow, intensity);
+          else if (s.particle_mode === "inhale") playInhaleMaterialize(noteWindow, intensity);
           else playGlowMaterialize(noteWindow, intensity);
         })
         .catch(() => {
@@ -2101,6 +2103,7 @@ export function mountNoteApp(noteId: string, preset = "") {
     // 同时作废任何“等待 getSettings 的待播放呼出”，确保关闭能干净接管——
     // 与“关闭被呼出打断”完全对称：双向都随时可打断对方。
     cancelGlowParticles(); // 取消进行中的粒子光效呼出/关闭动画
+    cancelInhaleParticles(); // 取消进行中的粒子吸入呼出/关闭动画
     cancelErode(); // 防御：清掉任何残留的侵蚀动画，避免叠加
     summonSeq++; // 作废进行中的呼出（其 getSettings().then 会检查 seq 后跳过）
     closing = true;
@@ -2139,8 +2142,9 @@ export function mountNoteApp(noteId: string, preset = "") {
         // 作废本次关闭，避免关闭动画与呼出动画同时改 clip-path 打架导致“卡住”。
         if (!closing) return;
         const intensity = s.particle_intensity ?? 50;
-        // 关闭动画：默认粒子光效（鸿蒙通知删除同款·与呼出共用同一套粒子）；erode=侵蚀消散。
+        // 关闭动画：默认粒子光效（鸿蒙通知删除同款·与呼出共用同一套粒子）；erode=侵蚀消散；inhale=粒子吸入。
         if (s.particle_mode === "erode") requestErodeDissolveClose(finish, intensity);
+        else if (s.particle_mode === "inhale") requestInhaleDissolveClose(finish, intensity);
         else requestGlowDissolveClose(finish, intensity);
       })
       .catch(() => {
