@@ -648,17 +648,23 @@ function runErode(
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (age < wipe + 60) {
-      const burstN = 3 + Math.round(density * 7); // 每个前沿点爆发 3~10 粒（火更厚）
+      const burstN = 4 + Math.round(density * 8); // 每个前沿点爆发 4~12 粒（更厚、更贴边）
+      // 燃烧边缘 = 该点 mask 从“可见”变“透明”的过渡带（age ∈ [T, T+featherMs]），
+      // 其中点 T+featherMs/2 即视觉上的“正在燃烧处”。火星根必须落在过渡带内，
+      // 否则会在便签已烧黑后才点燃 → 看起来“不在燃烧边缘、而在烧过的地方冒”。
+      // 尾随窗口只取过渡带结束后极短一段（不再长尾随），让根始终紧贴当前燃边。
+      const burstAt = featherMs * 0.5; // 相对 T 的偏移：等到半透明边才点燃
+      const tailEnd = featherMs + 110; // 过渡带结束后仅补一点余烬（原 380ms 过长，根滞后）
       for (let i = 0; i < ecount; i++) {
         const T = emitT[i];
-        if (age < T) continue;
+        if (age < T + burstAt) continue; // 前沿扫到“半透明边”才点燃（根对齐燃烧边缘）
         if (!emitBurst[i]) {
-          // 前沿刚扫到：沿边缘法线爆发一簇火星（粒子密集地贴着锯齿边缘喷出）
+          // 前沿刚扫到燃烧边：沿边缘法线爆发一簇火星（粒子密集地贴着锯齿边缘喷出）
           emitBurst[i] = 1;
           const bn = Math.max(0, Math.round(burstN * emitW[i])); // 末段前沿爆发数大幅减少
           for (let k = 0; k < bn; k++) spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
-        } else if (age < T + 380 && Math.random() < 0.5 * emitW[i]) {
-          // 前沿过后短暂尾随少量火花（余烬渐熄）；末段同样抑制
+        } else if (age < T + tailEnd && Math.random() < 0.45 * emitW[i]) {
+          // 燃烧边过后极短尾随（余烬渐熄），根仍紧贴燃边、不滞留已烧黑区
           spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
         }
       }
