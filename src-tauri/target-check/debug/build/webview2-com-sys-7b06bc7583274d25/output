@@ -1,0 +1,2 @@
+cargo:rustc-link-search=native=D:\My Custom Tool\StickyNote\src-tauri\target-check\debug\build\webview2-com-sys-7b06bc7583274d25\out\x64
+cargo:rustc-link-lib=advapi32

@@ -149,6 +149,11 @@ export function mountNoteApp(noteId: string, preset = "") {
       </div>
       <div class="cc-panel" id="tool-fg-panel" hidden></div>
       <div class="cc-panel" id="tool-bg-panel" hidden></div>
+      <div class="win-resizer" id="win-resizer" title="拖动调整窗口大小">
+        <svg class="win-resizer-grip" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
+          <path d="M2.5 9.5 L9.5 2.5 M5 12 L12 5 M0.5 6.5 L6.5 0.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      </div>
     </div>
   `;
 
@@ -186,6 +191,7 @@ export function mountNoteApp(noteId: string, preset = "") {
   const btnFmtFormat = document.getElementById("btn-fmt-format") as HTMLButtonElement;
   const fmtFormatMenu = document.getElementById("fmt-format-menu") as HTMLElement;
   const noteWindow = document.querySelector(".note-window") as HTMLElement;
+  const winResizer = document.getElementById("win-resizer") as HTMLElement;
 
   let current: NoteData = {
     content: "",
@@ -1627,6 +1633,8 @@ export function mountNoteApp(noteId: string, preset = "") {
       const max = isMaximizedState || (await appWindow.isMaximized().catch(() => false));
       btnMax.innerHTML = max ? ICON_RESTORE : ICON_MAX;
       btnMax.title = max ? "还原窗口" : "最大化";
+      // 最大化时禁用右下角缩放手柄（此时无法手动改尺寸）
+      winResizer.style.display = max ? "none" : "";
     } catch (e) {
       console.error("读取最大化状态失败:", e);
     }
@@ -1981,6 +1989,52 @@ export function mountNoteApp(noteId: string, preset = "") {
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
   });
+
+  // ---- 右下角自定义缩放手柄（替代系统 resize，避免透明窗口白屏 / 投影边框）----
+  // 用 appWindow.setSize 程序化改尺寸：不走系统 resize 边框，故无 WebView2 重建导致的白屏。
+  const MIN_W = 220;
+  const MIN_H = 150;
+  let winResizing = false;
+  let resStartX = 0;
+  let resStartY = 0;
+  let resStartW = 0;
+  let resStartH = 0;
+  winResizer.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    winResizing = true;
+    resStartX = e.clientX;
+    resStartY = e.clientY;
+    resStartW = window.innerWidth;
+    resStartH = window.innerHeight;
+    try {
+      winResizer.setPointerCapture(e.pointerId);
+    } catch {
+      /* 部分环境不支持指针捕获，退化为 document 级监听仍可工作 */
+    }
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "nwse-resize";
+  });
+  winResizer.addEventListener("pointermove", (e) => {
+    if (!winResizing) return;
+    const nw = Math.max(MIN_W, resStartW + (e.clientX - resStartX));
+    const nh = Math.max(MIN_H, resStartH + (e.clientY - resStartY));
+    appWindow.setSize(new LogicalSize(nw, nh)).catch(() => {});
+  });
+  const endWinResize = (e: PointerEvent) => {
+    if (!winResizing) return;
+    winResizing = false;
+    try {
+      winResizer.releasePointerCapture(e.pointerId);
+    } catch {
+      /* 同上 */
+    }
+    document.body.style.userSelect = "";
+    document.body.style.cursor = "";
+  };
+  winResizer.addEventListener("pointerup", endWinResize);
+  winResizer.addEventListener("pointercancel", endWinResize);
 
   // ---- 按钮事件 ----
 

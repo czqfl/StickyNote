@@ -1,0 +1,14 @@
+D:\My Custom Tool\StickyNote\src-tauri\target-check\debug\deps\serde-e63181ec0c37e411.d: C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\My\ Custom\ Tool\StickyNote\src-tauri\target-check\debug\build\serde-d96cddc3926a66b0\out/private.rs
+
+D:\My Custom Tool\StickyNote\src-tauri\target-check\debug\deps\libserde-e63181ec0c37e411.rlib: C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\My\ Custom\ Tool\StickyNote\src-tauri\target-check\debug\build\serde-d96cddc3926a66b0\out/private.rs
+
+D:\My Custom Tool\StickyNote\src-tauri\target-check\debug\deps\libserde-e63181ec0c37e411.rmeta: C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\My\ Custom\ Tool\StickyNote\src-tauri\target-check\debug\build\serde-d96cddc3926a66b0\out/private.rs
+
+C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\18087\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+D:\My\ Custom\ Tool\StickyNote\src-tauri\target-check\debug\build\serde-d96cddc3926a66b0\out/private.rs:
+
+# env-dep:OUT_DIR=D:\\My Custom Tool\\StickyNote\\src-tauri\\target-check\\debug\\build\\serde-d96cddc3926a66b0\\out

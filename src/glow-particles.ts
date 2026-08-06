@@ -6,10 +6,9 @@
 //
 // 视觉要点（对齐需求规格）：
 // - 双起点消散形态：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切——
-//   · 顶部起点：顶部快速向下推进，且向两侧蔓延快（左上角/右上角先被吞没）；
-//   · 底部起点：底部慢速向上推进，边界呈驼峰状（中间快、两侧慢）；
-//   · 顶部到达侧边后沿侧边向下"流淌"（速度介于顶底之间）；
-//   · 上下两个消散区域在中央附近汇合，界面完全消失。
+//   · 底部起点（1~2 个随机点）：自下向上快速推进；
+//   · 顶部起点（单随机点）：自上向下缓慢推进；
+//   · 两者相向蔓延，在便签中上部附近汇合、界面完全消失；
 //   叠加 fbm 噪声 + 细碎抖动，边缘随机破碎（参考侵蚀的随机感，不破坏整体形态）。
 // - 粒子数量随时间递增：前 50% 动画时间消散的粒子少、后 50% 多（粒子化速度较快，
 //   主体粒子集中在动画后半段涌出），粒子寿命长、持续飘散。
@@ -467,8 +466,9 @@ function runGlow(
 
   // ---- 消散时间场 T(x,y)：从若干随机源点「涟漪式」向外扩散 ----
   // 取代旧方案（顶/底边整条边同时 T=0 发起 → 看起来像全底边齐发、缺乏明确起源点）。
-  // 现在每次播放随机选 1~2 个底部源点，T 以「到最近源点的归一化距离」为主驱动：
-  // 源点处 T≈0 最先消散，越远越晚，形成「从某点发起、向外蔓延」的涟漪；
+  // 现在每次播放随机选 1~2 个底部源点（向上快速）+ 1 个顶部源点（向下缓慢）：
+  // 每源 T 以「到该源点的归一化距离」为主驱动，scale 控制前沿速度（大=慢、小=快），
+  // 使底部快速上行、顶部缓慢下压，二者相向蔓延、中央汇合；
   // 源点位置(x/y)、发起时刻都随机 + fbm 噪声扰动 → 波峰（最远等值线）高低错落、每次不同，随机性足。
   // dissolve 语义：T 小=先消散（源点先空）；materialize 用 Tm=wipe-T 反向 → 源点最后成形。
   const featherMs = 90; // 羽化软边时间带宽
@@ -493,15 +493,25 @@ function runGlow(
 
   // 随机源点（每次播放重新生成 → 每次观感不同）
   const diag = Math.hypot(w, h);
-  const sources: { x: number; y: number; t0: number }[] = [];
-  const nMain = 1 + (Math.random() < 0.35 ? 1 : 0); // 默认单点发起；35% 概率双源增加变化
-  for (let s = 0; s < nMain; s++) {
+  interface DissolveSource { x: number; y: number; t0: number; scale: number }
+  const sources: DissolveSource[] = [];
+  // 底部源：1~2 个随机点，自下向上快速推进（维持原观感）
+  const nBottom = 1 + (Math.random() < 0.35 ? 1 : 0);
+  for (let s = 0; s < nBottom; s++) {
     sources.push({
       x: (0.12 + Math.random() * 0.76) * w, // 底部随机 x（偏中间，避免贴死角落）
       y: h - Math.random() * 0.18 * h,       // 底部 0~18% 高度内随机（波峰随之高低错落）
       t0: Math.random() * 0.10 * wipe,       // 各源发起时刻略错开，避免齐发
+      scale: 1.02,                           // 底部：较快（scale 越小前沿越快）
     });
   }
+  // 顶部源：单一随机点，自上向下缓慢推进（与底部相向、中央汇合）
+  sources.push({
+    x: (0.12 + Math.random() * 0.76) * w, // 顶部随机 x
+    y: Math.random() * 0.18 * h,          // 顶部 0~18% 高度内随机
+    t0: Math.random() * 0.06 * wipe,
+    scale: 1.55,                          // 顶部：较慢（scale 越大前沿越慢，与底部 1.02 形成速度差）
+  });
 
   // 返回 CSS 坐标 (nx,ny) 的消散时刻：取「最近源点」的扩散时刻
   const dissolveTimeAt = (nx: number, ny: number): number => {
@@ -509,7 +519,7 @@ function runGlow(
     for (let si = 0; si < sources.length; si++) {
       const sp = sources[si];
       const d = Math.hypot(nx - sp.x, ny - sp.y) / diag; // 0(源点)..~1(最远)
-      const Tsrc = sp.t0 + Math.pow(d, 0.82) * (wipe * 1.02);
+      const Tsrc = sp.t0 + Math.pow(d, 0.82) * (wipe * sp.scale);
       if (Tsrc < best) best = Tsrc;
     }
     let T = best;
