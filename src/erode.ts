@@ -28,6 +28,9 @@
 
 let eroding = false;
 let materializing = false;
+/** 动画代次：每次 runErode 启动 +1。上一轮动画遗留的延时清理（cleanupAfterHide）凭此作废，
+ *  避免快速呼出时把正在播放的新动画便签裁掉/隐藏（见 cleanupAfterHide 守卫）。 */
+let erodeGen = 0;
 
 /** 当前侵蚀动画的“立即中止”句柄（由 runErode 注册；cancelErode 调用）。
  *  中止 = 停帧 + 复原页面（保持可见，供“呼出打断关闭”等快速切换）。 */
@@ -196,6 +199,7 @@ function runErode(
   particleDensity: number,
   onDone: () => void,
 ): () => void {
+  const myGen = ++erodeGen; // 本动画实例代次：作废上一轮遗留的延时清理
   const isDissolve = direction === "dissolve";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   // 内容尺寸（便签本体）：动画开始前窗口尚未扩大，innerWidth/Height 即便签尺寸。
@@ -599,6 +603,9 @@ function runErode(
   }
 
   const cleanupAfterHide = () => {
+    // 代次守卫：若已启动新动画（erodeGen 改变），本实例的延时清理作废，
+    // 否则会把正在播放的新动画便签裁掉/隐藏（快速关闭后立刻呼出时会触发）。
+    if (myGen !== erodeGen) return;
     stopLoop();
     // 保持"空画面"供下次呼出（契约同 dissolve.ts cleanup）
     blankRoot(root);
@@ -617,18 +624,23 @@ function runErode(
 
   const finishMaterialize = () => {
     stopLoop();
-    restoreRoot(root);
-    try {
-      canvas.remove();
-    } catch {
-      /* ignore */
-    }
-    try {
-      loseCtx?.loseContext(); // 释放 GPU 资源，避免透明窗口下上下文泄漏
-    } catch {
-      /* ignore */
-    }
+    if (myGen !== erodeGen) return; // 已被新动画接管：勿复位其样式
     materializing = false;
+    // 让“便签已完整显现”的最后一帧先提交，再移除覆盖层与复位样式，避免收尾闪一下。
+    requestAnimationFrame(() => {
+      if (myGen !== erodeGen) return; // 期间已启动新动画：勿复位其样式
+      try {
+        canvas.remove();
+      } catch {
+        /* ignore */
+      }
+      try {
+        loseCtx?.loseContext(); // 释放 GPU 资源，避免透明窗口下上下文泄漏
+      } catch {
+        /* ignore */
+      }
+      restoreRoot(root);
+    });
   };
 
   const frame = (now: number) => {

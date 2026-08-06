@@ -27,6 +27,9 @@
 // 看门狗强制收尾，杜绝动画卡死导致窗口无法关闭/成形。
 
 let glowActive = false;
+/** 动画代次：每次 runGlow 启动 +1。上一轮动画遗留的延时清理（cleanupAfterHide）凭此作废，
+ *  避免快速呼出时把正在播放的新动画便签裁掉/隐藏（见 cleanupAfterHide 守卫）。 */
+let glowGen = 0;
 
 /** 当前粒子动画的“立即中止”句柄（由 runGlow 注册；cancelGlowParticles 调用）。 */
 let cancelGlowFn: (() => void) | null = null;
@@ -333,6 +336,7 @@ function runGlow(
   particleDensity: number,
   onDone: () => void,
 ): () => void {
+  const myGen = ++glowGen; // 本动画实例代次：作废上一轮遗留的延时清理
   const isDissolve = direction === "dissolve";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = window.innerWidth;
@@ -752,6 +756,9 @@ function runGlow(
   }
 
   const cleanupAfterHide = () => {
+    // 代次守卫：若已启动新动画（glowGen 改变），本实例的延时清理作废，
+    // 否则会把正在播放的新动画便签裁掉/隐藏（快速关闭后立刻呼出时会触发）。
+    if (myGen !== glowGen) return;
     stopLoop();
     blankRoot(root); // 保持“空画面”供下次呼出
     try {
@@ -764,13 +771,18 @@ function runGlow(
 
   const finishMaterialize = () => {
     stopLoop();
-    restoreRoot(root); // 成形完成：便签完整可见
-    try {
-      canvas.remove();
-    } catch {
-      /* ignore */
-    }
+    if (myGen !== glowGen) return; // 已被新动画接管：勿复位其样式
     glowActive = false;
+    // 让“便签已完整显现”的最后一帧先提交，再移除覆盖层与复位样式，避免收尾闪一下。
+    requestAnimationFrame(() => {
+      if (myGen !== glowGen) return; // 期间已启动新动画：勿复位其样式
+      try {
+        canvas.remove();
+      } catch {
+        /* ignore */
+      }
+      restoreRoot(root); // 成形完成：便签完整可见
+    });
   };
 
   const frame = (now: number) => {
