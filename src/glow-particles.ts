@@ -427,10 +427,12 @@ function runGlow(
   // 底部、顶部、随机一角（左上/右上）三处点火，几乎同时发起，速度/形态按方向分层——
   //   · 底部点火：向上消散比向两边快 → 前沿呈「高窄尖塔」（Laplace 窄峰）向上冲刺，
   //     峰随高度缓慢衰减，到顶部附近才变平；
-  //   · 顶部点火：顶边与其余点火同时发起，向下慢推 → 最慢，前沿「水平缓弧」（顶部平面，波动小）；
+  //   · 顶部点火：顶边与其余点火同时发起，向下慢推 → 最慢，前沿「水平缓弧」（顶部平面）；
   //   · 随机一角：左上角或右上角随机一个「小矩形起火区」（从所选侧最上方往下截一段、
-  //     再向里伸一点），该角最先起火、向四周平滑蔓延。
-  // 实现：底部扫掠(q^1.8,下快上慢) + 高窄尖塔，顶部取「顶部平面」的 min；
+  //     再向里伸一点），该角最先起火、向四周平滑蔓延；
+  //   · 位置随机性：底部扫掠速度、顶部起火时刻/下推速度都随 x 平滑变化（大尺度缓弯）
+  //     → 各列快慢不同，顶部与底部的交汇带参差、不呈水平直线。
+  // 实现：底部扫掠(q^1.8,下快上慢,随 x 微变) + 高窄尖塔，顶部取「顶部平面(随 x 微变)」的 min；
   //   角矩形加在 min 之后（最先起火）；柔和弯曲加在最后 → 各处接缝连贯、波动一致。
   // dissolve 语义：T 小=先消散（源点先空）；materialize 用 wipe-T 反向。
   const featherMs = 90; // 羽化软边时间带宽
@@ -459,6 +461,9 @@ function runGlow(
   const cornerIsLeft = Math.random() < 0.5; // 左上角或右上角随机选一个
   const tTop = 60;    // 顶部平面起火时刻（ms）：顶边与底部/角矩形同时发起
   const dTop = 2800;  // 顶部平面下推时长基数（ms）：大 = 慢（顶部最慢、水平缓弧）
+  const sweepRand = 0.10; // 底部扫掠速度随 x 平滑变化 ±10% → 各列快慢不同（交汇不水平）
+  const topRandT = 80;    // 顶部起火时刻随 x ±80ms → 顶边不同位置不同步起火
+  const topRandD = 0.16;  // 顶部下推速度随 x ±16% → 顶前沿大尺度缓弯
   const cx = (0.5 + (Math.random() - 0.5) * 0.30) * w; // 底部点火点 x（中线附近随机）
   const noisePhase = Math.random() * 100; // 噪声相位随机 → 每次前沿弯曲不同
 
@@ -498,12 +503,17 @@ function runGlow(
   // 返回 CSS 坐标 (nx,ny) 的消散时刻：底部扫掠+高窄尖塔，顶部取平面（min），随机一角小矩形后置
   const dissolveTimeAt = (nx: number, ny: number): number => {
     const q = (h - ny) / h; // 0 底 .. 1 顶
-    // 底部扫掠：下快上慢（凸曲线，q 大=顶部更慢）
-    let T = leadIn + sweepSpan * Math.pow(q, 1.8);
+    // 各列速度随机量（随 x 平滑变化，大尺度缓弯 → 不同位置消散快慢不同，
+    // 顶部与底部的交汇不再是一条水平直线）
+    const sweepVar = valueNoise(nx * 0.006 + noisePhase, 3.31) * 2 - 1;
+    const topVar = valueNoise(nx * 0.006 + noisePhase + 100, 7.71) * 2 - 1;
+    // 底部扫掠：下快上慢（凸曲线），速度随 x ±sweepRand
+    let T = leadIn + sweepSpan * (1 + sweepRand * sweepVar) * Math.pow(q, 1.8);
     // 底部「高窄尖塔」：中线向上最快、向两边慢（Laplace 窄峰），峰随高度缓慢衰减 → 顶部附近才变平
     T -= peakAmp * Math.exp(-Math.abs(nx - cx) / (peakHalfW * w)) * Math.pow(1 - q, 0.6);
-    // 顶部平面：顶边起火后向下慢推（最慢、水平缓弧）——与底部扫掠取 min，顶部区域由此接管
-    const topPlane = tTop + (1 - q) * dTop;
+    // 顶部平面：起火时刻与下推速度随 x 变化（顶边不同步起火、前沿大尺度缓弯）——
+    // 与底部扫掠取 min，顶部区域由此接管；交汇线随 x 参差、不水平
+    const topPlane = (tTop + topRandT * topVar) + (1 - q) * dTop * (1 + topRandD * topVar);
     if (topPlane < T) T = topPlane;
     // 随机一角小矩形起火区（左上或右上）：从所选侧最上方往下截一段、再向里伸一点，
     // 加在 min 之后 → 该角区域最先起火（与底部/顶部同时发起），向四周平滑蔓延
