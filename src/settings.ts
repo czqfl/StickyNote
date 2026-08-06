@@ -487,6 +487,7 @@ export async function openSettingsModal(): Promise<void> {
                 <label class="settings-label">粒子风格</label>
                 <select class="settings-select" id="set-particle-mode">
                   <option value="particle">粒子</option>
+                  <option value="inhale">粒子吸入</option>
                   <option value="erode">火焰</option>
                 </select>
               </div>
@@ -942,11 +943,13 @@ export async function openSettingsModal(): Promise<void> {
   particleIntensitySlider.addEventListener("input", () => {
     particleIntensityVal.textContent = particleIntensitySlider.value;
   });
-  // ---- 粒子风格：particle=粒子（呼出+关闭·默认）、erode=火焰（呼出+关闭，橙黄火舌贴燃烧边）----
+  // ---- 粒子风格：particle=粒子（呼出+关闭·默认）、inhale=粒子吸入（与粒子同套风效·向内汇聚，独立成项便于日后分化）、erode=火焰（呼出+关闭，橙黄火舌贴燃烧边）----
   // 注意：必须先设置 value 再 enhanceSelect，否则自定义下拉的 label 会停在第一个选项上
   // （enhanceSelect 内部会立即按当前选中项渲染文本，后设 value 不会触发它重新同步）。
   const particleModeSel = overlay.querySelector("#set-particle-mode") as HTMLSelectElement;
-  particleModeSel.value = draft.particle_mode === "erode" ? "erode" : "particle";
+  particleModeSel.value =
+    draft.particle_mode === "erode" ? "erode" :
+    draft.particle_mode === "inhale" ? "inhale" : "particle";
   enhanceSelect(particleModeSel);
 
   // ---- 全局默认背景图 ----
