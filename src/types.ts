@@ -68,8 +68,8 @@ export interface Settings {
   glass_blur?: number;
   /** 透明主题“背景不透明度”（0~100%）：原生亚克力着色层强度，等价 PowerShell 设置的不透明度滑块 */
   transparent_opacity?: number;
-  /** 粒子效果强度 0~100（关闭/呼出动画的粒子数量），默认 50 */
-  particle_intensity?: number;
+  /** 粒子数量 0~100（同时控制“粒子消散”与“粒子吸入”两种动画的粒子规模），默认 50 */
+  particle_count?: number;
   /** 粒子效果风格：particle=粒子（呼出+关闭·默认，鸿蒙通知删除同款，颜色采样自背景主题色）/ erode=火焰（呼出+关闭，橙黄火舌贴燃烧边；设置值 "erode" 为历史命名，沿用旧值避免破坏已保存设置）。旧值 flame 已移除，归入 particle */
   particle_mode?: string;
 }

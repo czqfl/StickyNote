@@ -51,7 +51,7 @@ const FLOW_BY2 = 0.008;
 const FLOW_W2 = 0.35;
 
 /** 播放粒子成形呼出动画；动画收尾时自动复原页面（无需 onDone）。
- * @param particleDensity 粒子强度 0~100（默认 50≈4250 粒，最大 100≈8000 粒） */
+ * @param particleDensity 粒子数量 0~100（默认 50≈4250 粒，最大 100≈8000 粒） */
 export function playSummonMaterialize(root: HTMLElement, particleDensity = 50): void {
   if (summoning) return;
   summoning = true;

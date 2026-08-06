@@ -350,7 +350,7 @@ function defaultSettings(): Settings {
     glass_enabled: true,
     glass_blur: 55,
     transparent_opacity: 65,
-    particle_intensity: 50,
+    particle_count: 50,
     particle_mode: "particle",
   } as Settings;
 }
@@ -479,14 +479,14 @@ export async function openSettingsModal(): Promise<void> {
               </div>
               <label class="settings-check"><input type="checkbox" id="set-edge-snap"> 贴边自动收起 / 弹出（QQ 风格）</label>
               <div class="settings-row">
-                <label class="settings-label">粒子强度</label>
-                <input type="range" id="particle-intensity" min="0" max="100" step="1" value="50">
-                <span class="settings-val" id="particle-intensity-val">50</span>
+                <label class="settings-label">粒子数量</label>
+                <input type="range" id="particle-count" min="0" max="100" step="1" value="50">
+                <span class="settings-val" id="particle-count-val">50</span>
               </div>
               <div class="settings-row">
                 <label class="settings-label">粒子风格</label>
                 <select class="settings-select" id="set-particle-mode">
-                  <option value="particle">粒子</option>
+                  <option value="particle">粒子消散</option>
                   <option value="inhale">粒子吸入</option>
                   <option value="erode">火焰</option>
                 </select>
@@ -936,14 +936,14 @@ export async function openSettingsModal(): Promise<void> {
   // ---- 靠边自动收起 ----
   const edgeSnapChk = overlay.querySelector("#set-edge-snap") as HTMLInputElement;
   edgeSnapChk.checked = draft.edge_snap !== false;
-  const particleIntensitySlider = overlay.querySelector("#particle-intensity") as HTMLInputElement;
-  const particleIntensityVal = overlay.querySelector("#particle-intensity-val") as HTMLElement;
-  particleIntensitySlider.value = String(draft.particle_intensity ?? 50);
-  particleIntensityVal.textContent = String(draft.particle_intensity ?? 50);
-  particleIntensitySlider.addEventListener("input", () => {
-    particleIntensityVal.textContent = particleIntensitySlider.value;
+  const particleCountSlider = overlay.querySelector("#particle-count") as HTMLInputElement;
+  const particleCountVal = overlay.querySelector("#particle-count-val") as HTMLElement;
+  particleCountSlider.value = String(draft.particle_count ?? 50);
+  particleCountVal.textContent = String(draft.particle_count ?? 50);
+  particleCountSlider.addEventListener("input", () => {
+    particleCountVal.textContent = particleCountSlider.value;
   });
-  // ---- 粒子风格：particle=粒子（呼出+关闭·默认）、inhale=粒子吸入（与粒子同套风效·向内汇聚，独立成项便于日后分化）、erode=火焰（呼出+关闭，橙黄火舌贴燃烧边；设置值 "erode" 为历史命名）----
+  // ---- 粒子风格：particle=粒子消散（呼出+关闭·默认·向外扩散）、inhale=粒子吸入（与粒子同套风效·向内汇聚，独立成项便于日后分化）、erode=火焰（呼出+关闭，橙黄火舌贴燃烧边；设置值 "erode" 为历史命名）----
   // 注意：必须先设置 value 再 enhanceSelect，否则自定义下拉的 label 会停在第一个选项上
   // （enhanceSelect 内部会立即按当前选中项渲染文本，后设 value 不会触发它重新同步）。
   const particleModeSel = overlay.querySelector("#set-particle-mode") as HTMLSelectElement;
@@ -1248,7 +1248,7 @@ export async function openSettingsModal(): Promise<void> {
     draft.md_theme = mdThemeSel.value;
     draft.theme = themeSel.value;
     draft.edge_snap = edgeSnapChk.checked;
-    draft.particle_intensity = Number(particleIntensitySlider.value);
+    draft.particle_count = Number(particleCountSlider.value);
     draft.particle_mode = (overlay.querySelector("#set-particle-mode") as HTMLSelectElement).value;
     draft.llm_base_url = llmBase.value.trim();
     draft.llm_api_key = llmKey.value.trim();

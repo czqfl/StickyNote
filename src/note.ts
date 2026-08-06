@@ -851,14 +851,14 @@ export function mountNoteApp(noteId: string, preset = "") {
         }
         return;
       }
-      // 非透明主题：按粒子强度/风格设置启动呼出动画（默认粒子光效；火焰模式（设置值 "erode"，历史命名）用火焰消散）
+      // 非透明主题：按粒子数量/风格设置启动呼出动画（默认粒子消散；火焰模式（设置值 "erode"，历史命名）用火焰消散）
       const seq = summonSeq; // 快照：等待 getSettings 期间若被隐藏/关闭作废则跳过
       getSettings()
         .then((s) => {
           // getSettings 是异步的：等待期间若又触发了关闭/托盘隐藏/删除，作废本次呼出，
           // 避免呼出动画与关闭动画同时改 clip-path 打架导致“卡住”。
           if (seq !== summonSeq || closing || deleted) return;
-          const intensity = s.particle_intensity ?? 50;
+          const intensity = s.particle_count ?? 50;
           if (s.particle_mode === "erode") playFlameMaterialize(noteWindow, intensity);
           else if (s.particle_mode === "inhale") playInhaleMaterialize(noteWindow, intensity);
           else playGlowMaterialize(noteWindow, intensity);
@@ -2135,13 +2135,13 @@ export function mountNoteApp(noteId: string, preset = "") {
       finish();
       return;
     }
-    // 非透明主题：按粒子强度/风格设置启动关闭动画（强度从设置读取，失败回退默认 50）
+    // 非透明主题：按粒子数量/风格设置启动关闭动画（数量从设置读取，失败回退默认 50）
     getSettings()
       .then((s) => {
         // getSettings 是异步的：等待期间若用户又呼出了（closing 已被复位/取消），
         // 作废本次关闭，避免关闭动画与呼出动画同时改 clip-path 打架导致“卡住”。
         if (!closing) return;
-        const intensity = s.particle_intensity ?? 50;
+        const intensity = s.particle_count ?? 50;
         // 关闭动画：默认粒子光效（鸿蒙通知删除同款·与呼出共用同一套粒子）；火焰模式（设置值 "erode"，历史命名）用火焰消散；inhale=粒子吸入。
         if (s.particle_mode === "erode") requestFlameDissolveClose(finish, intensity);
         else if (s.particle_mode === "inhale") requestInhaleDissolveClose(finish, intensity);

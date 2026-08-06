@@ -397,9 +397,9 @@ struct Settings {
     /// （CSS --trans-opacity，color-mix），与 PowerShell 设置的“背景不透明度”同款。
     #[serde(default = "default_transparent_opacity")]
     transparent_opacity: f64,
-    /// 粒子效果强度 0~100（关闭/呼出动画的粒子数量）：默认 50，上限 100。
-    #[serde(default = "default_particle_intensity")]
-    particle_intensity: f64,
+    /// 粒子数量 0~100（同时控制“粒子消散”与“粒子吸入”两种动画的粒子规模）：默认 50，上限 100。
+    #[serde(default = "default_particle_count", alias = "particle_intensity")]
+    particle_count: f64,
     /// 粒子效果风格：flame=火焰消散（默认）/ erode=侵蚀消散（烧纸/酸蚀，羽化软边）。
     #[serde(default = "default_particle_mode")]
     particle_mode: String,
@@ -421,7 +421,7 @@ fn default_transparent_opacity() -> f64 {
     65.0
 }
 
-fn default_particle_intensity() -> f64 {
+fn default_particle_count() -> f64 {
     50.0
 }
 
@@ -466,7 +466,7 @@ impl Default for Settings {
             glass_enabled: true,
             glass_blur: 16.0,
             transparent_opacity: 65.0,
-            particle_intensity: 50.0,
+            particle_count: 50.0,
             particle_mode: "flame".into(),
         }
     }
