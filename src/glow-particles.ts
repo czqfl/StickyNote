@@ -424,13 +424,14 @@ function runGlow(
   };
 
   // ---- 消散时间场 T(x,y)：点纸式方向性燃烧（非圆涟漪）----
-  // 像点燃一张纸，底部、顶部、随机一侧（左右二选一）各起火，速度/形态按方向分层——
-  //   · 底部点火：火焰向上、优先烧掉上方的纸 → 向上粒子化最快，前沿呈「大波峰」（Laplace
-  //     尖顶，尖锐且体量大）向上扩张，峰随高度缓慢衰减、到顶部附近才变平；
-  //   · 顶部点火：顶边在 tTop 起火后向下慢推 → 最慢，前沿「水平缓弧」（顶部平面，波动小）；
-  //   · 随机单侧点火：左右随机选一侧，整条边（一片，非一点）起粒子、中速向中央吃入；
-  // 实现：底部扫掠(q^1.8,下快上慢) + 大波峰 + 单侧条带，顶部取「顶部平面」的 min；
-  //   柔和弯曲加在 min 之后 → 各处接缝连贯、波动一致；单条连续前沿，无圆洞/补丁。
+  // 底部、顶部、随机一角（左上/右上）三处点火，几乎同时发起，速度/形态按方向分层——
+  //   · 底部点火：向上消散比向两边快 → 前沿呈「高窄尖塔」（Laplace 窄峰）向上冲刺，
+  //     峰随高度缓慢衰减，到顶部附近才变平；
+  //   · 顶部点火：顶边与其余点火同时发起，向下慢推 → 最慢，前沿「水平缓弧」（顶部平面，波动小）；
+  //   · 随机一角：左上角或右上角随机一个「小矩形起火区」（从所选侧最上方往下截一段、
+  //     再向里伸一点），该角最先起火、向四周平滑蔓延。
+  // 实现：底部扫掠(q^1.8,下快上慢) + 高窄尖塔，顶部取「顶部平面」的 min；
+  //   角矩形加在 min 之后（最先起火）；柔和弯曲加在最后 → 各处接缝连贯、波动一致。
   // dissolve 语义：T 小=先消散（源点先空）；materialize 用 wipe-T 反向。
   const featherMs = 90; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
@@ -449,16 +450,23 @@ function runGlow(
 
   // 方向性燃烧参数（每次播放重新生成 → 每次观感不同）
   const leadIn = 40; // 点火前导：极底边不会在 t=0 瞬间全没
-  const sweepSpan = 1550; // 底部扫掠时长基数：配合顶部平面/单侧起火，总时长回落到 ~1000ms
-  const peakAmp = 260;    // 底部「大波峰」强度（ms）：中线点火大幅提前烧，形成大而尖的波峰
-  const peakHalfW = 0.12; // 波峰半宽（w 比例，Laplace 尖顶：|x-cx| 指数衰减，顶端尖锐、体量大）
-  const sideAmp = 200;    // 随机单侧「整条边」起火强度（ms）：中速向中央吃入
-  const sideW = 0.14;     // 单侧条带吃入宽度（w 比例）
-  const sideIsLeft = Math.random() < 0.5; // 左右两侧随机选一侧发起消散（不是两边都烧）
-  const tTop = 300;   // 顶部平面起火时刻（ms）：顶部边缘此时开始向下慢推
+  const sweepSpan = 1600; // 底部扫掠时长基数：配合顶部平面/角矩形，总时长回落到 ~1000ms
+  const peakAmp = 280;    // 底部「高窄尖塔」强度（ms）：中线向上最快、向两边慢
+  const peakHalfW = 0.07; // 尖塔半宽（w 比例，Laplace 尖顶：窄而高 → 向上消散比向两边快）
+  const rectAmp = 240;    // 角落小矩形起火区强度（ms）：随机一个顶角（左上或右上）
+  const rectW = 0.13;     // 角矩形横向宽度（w 比例：从所选侧边向里伸一段）
+  const rectH = 0.17;     // 角矩形纵向长度（h 比例：从所选侧最上方往下截一段）
+  const cornerIsLeft = Math.random() < 0.5; // 左上角或右上角随机选一个
+  const tTop = 60;    // 顶部平面起火时刻（ms）：顶边与底部/角矩形同时发起
   const dTop = 2800;  // 顶部平面下推时长基数（ms）：大 = 慢（顶部最慢、水平缓弧）
   const cx = (0.5 + (Math.random() - 0.5) * 0.30) * w; // 底部点火点 x（中线附近随机）
   const noisePhase = Math.random() * 100; // 噪声相位随机 → 每次前沿弯曲不同
+
+  // 平滑阶跃：0..e 内从 0 平滑升到 1（角矩形区域形状用）
+  const smoothstep = (e0: number, e1: number, x: number): number => {
+    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  };
 
   // 确定性值噪声：提供「几个大的缓弯 + 细碎小弯」，幅度克制（波动不大，顶部保持水平）。
   const hash01 = (n: number): number => {
@@ -487,21 +495,22 @@ function runGlow(
     );
   };
 
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻：底部扫掠+大波峰+随机单侧整条边起火，顶部取平面（min）
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻：底部扫掠+高窄尖塔，顶部取平面（min），随机一角小矩形后置
   const dissolveTimeAt = (nx: number, ny: number): number => {
     const q = (h - ny) / h; // 0 底 .. 1 顶
     // 底部扫掠：下快上慢（凸曲线，q 大=顶部更慢）
     let T = leadIn + sweepSpan * Math.pow(q, 1.8);
-    // 底部「大波峰」：中线点火大幅提前烧，Laplace 尖顶（顶端尖锐、体量大），
-    // 峰随高度缓慢衰减(0.6) → 爬升全程保持明显，到顶部附近才变平
+    // 底部「高窄尖塔」：中线向上最快、向两边慢（Laplace 窄峰），峰随高度缓慢衰减 → 顶部附近才变平
     T -= peakAmp * Math.exp(-Math.abs(nx - cx) / (peakHalfW * w)) * Math.pow(1 - q, 0.6);
-    // 随机单侧：整条边（一片）起粒子、中速向中央吃入（不是点；只有随机选中的一侧）
-    const edgeDist = sideIsLeft ? nx : w - nx;
-    T -= sideAmp * Math.exp(-Math.pow(edgeDist / (sideW * w), 2)) * Math.pow(q, 0.7) * Math.pow(1 - q, 0.35);
     // 顶部平面：顶边起火后向下慢推（最慢、水平缓弧）——与底部扫掠取 min，顶部区域由此接管
     const topPlane = tTop + (1 - q) * dTop;
     if (topPlane < T) T = topPlane;
-    // 柔和弯曲加在 min 之后 → 顶/底/侧各处接缝连贯、波动一致（顶部仍水平、波动小）
+    // 随机一角小矩形起火区（左上或右上）：从所选侧最上方往下截一段、再向里伸一点，
+    // 加在 min 之后 → 该角区域最先起火（与底部/顶部同时发起），向四周平滑蔓延
+    const rectX = cornerIsLeft ? nx : w - nx;
+    const rectShape = (1 - smoothstep(0, rectW * w, rectX)) * (1 - smoothstep(0, rectH * h, ny));
+    T -= rectAmp * rectShape;
+    // 柔和弯曲加在最后 → 顶/底/角各处接缝连贯、波动一致（顶部仍水平、波动小）
     T += gentleNoise(nx, ny);
     if (T < 0) T = 0;
     else if (T > wipe - featherMs) T = wipe - featherMs;
