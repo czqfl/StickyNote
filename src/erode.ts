@@ -439,8 +439,8 @@ function runErode(
     }
   }
 
-  // 余烬粒子池（SoA + swap-remove），数量随强度大幅提升
-  const maxEmbers = Math.round(1400 + density * 3000); // 1400 ~ 4400（细水长流+持久需大池，配合帧上限避免开头爆满导致后边寂灭）
+  // 余烬粒子池（SoA + swap-remove）：寿命改短后同屏存活数大幅下降，池可相应缩小。
+  const maxEmbers = Math.round(1100 + density * 2200); // 1100 ~ 3300（短命贴边，配合帧上限防开头爆满）
   const ex = new Float32Array(maxEmbers);
   const ey = new Float32Array(maxEmbers);
   const evx = new Float32Array(maxEmbers);
@@ -454,18 +454,21 @@ function runErode(
   const glData = new Float32Array(maxEmbers * 8);
 
   // 在前沿点 (x,y) 沿边缘法线 (nmx,nmy) 喷出一粒火星。w 为发射权重（末段小 → 火星更小更弱）。
-  // 速度 = 法线喷射(贴合边缘方向) + 上升浮力 + 随机湍流；法线让竖直锯齿段把粒子甩向侧向。
+  // 关键：推力小、寿命短 → 单粒紧贴出生边、火舌只舔出一小段（约 10~20px），
+  // 不飞散成团；“持久”由沿燃烧边**持续 spawn**（细水长流）保证，而非单粒长命漂走。
+  // 法线让水平段向上喷、竖直锯齿段向侧向喷 → 粒子流贴合破碎边缘几何、与燃边紧密联动。
   const spawnEmber = (x: number, y: number, nmx: number, nmy: number, w: number) => {
     if (emberCount >= maxEmbers) return;
     const i = emberCount++;
-    ex[i] = x + (Math.random() - 0.5) * 5;
+    ex[i] = x + (Math.random() - 0.5) * 4;
     ey[i] = y + (Math.random() - 0.5) * 4;
-    const kick = (30 + Math.random() * 70) * (0.5 + 0.5 * w); // 末段更弱
+    const kick = (16 + Math.random() * 26) * (0.5 + 0.5 * w); // 小推力：火舌贴边、不飞散成团
     // materialize 时前沿推进方向与 dissolve 相反，法线取反保持"沿推进方向喷"
     const dir = isDissolve ? 1 : -1;
-    evx[i] = nmx * kick * dir + (Math.random() - 0.5) * 30;
-    evy[i] = nmy * kick * dir - (46 + Math.random() * 96);
-    elife[i] = 500 + Math.random() * 700; // 0.5~1.2s：持久飘散；配合帧上限让池均匀周转、后边持续冒
+    // 沿边缘法线小推力（贴合边缘几何）+ 轻微上升浮力（火舌向上舔）+ 极小湍流（不横向铺开）
+    evx[i] = nmx * kick * dir + (Math.random() - 0.5) * 10;
+    evy[i] = nmy * kick * dir - (28 + Math.random() * 46);
+    elife[i] = 150 + Math.random() * 200; // 0.15~0.35s：短命→每粒紧贴出生边、不漂成团；持久由沿边持续 spawn 保证
     eage[i] = 0;
     esize[i] = (2.6 + Math.random() * 3.8) * (0.5 + 0.5 * w); // 更大更厚；末段更小
     eseed[i] = Math.random() * Math.PI * 2;
@@ -655,11 +658,11 @@ function runErode(
       //   - 整段动画期间只要还有点处于窗口就持续冒 → 后边也出现（旧版一次爆发 + 长寿命把池塞满→后边寂灭）；
       //   - 根沿边缘铺开、连续渗出的火舌，而不是一上来全屏齐发成“一团”。
       const burstAt = featherMs * 0.5; // 相对 T：等到半透明边才点燃
-      const winEnd = featherMs + 360;  // 火舌飘离前沿后熄灭
+      const winEnd = featherMs + 150;  // 火舌稍离前沿即熄（短命已保证贴边；不再长尾随拖出已烧黑区火云）
       // 全局每帧 spawn 上限：防止开头一帧把粒子池塞满、导致后续燃到的点 spawn 不到空位（后边寂灭）。
-      // 配合寿命与池容量，让粒子在整个动画里均匀周转、持续可见。
-      const spawnProb = 0.6; // 窗口内每点每帧 spawn 概率（细水长流）
-      const FRAME_CAP = Math.round(34 + density * 42); // 每帧最多约 34~76 粒
+      // 配合短寿命，粒子在整段动画里均匀周转、持续可见。
+      const spawnProb = 0.7; // 窗口内每点每帧 spawn 概率（细水长流）
+      const FRAME_CAP = Math.round(40 + density * 50); // 每帧最多约 40~90 粒
       let spawned = 0;
       for (let i = 0; i < ecount; i++) {
         const T = emitT[i];
@@ -667,9 +670,9 @@ function runErode(
         if (age > T + winEnd) continue;    // 火舌飘离后熄灭，不在已烧黑区滞留
         if (spawned >= FRAME_CAP) break;   // 全帧上限：避免开头爆满
         if (Math.random() < emitW[i] * spawnProb) {
-          // 根沿边缘铺开一点抖动，火舌有层次、不挤成一簇（更真实）
-          const ox = (Math.random() - 0.5) * emitSpacing;
-          const oy = (Math.random() - 0.5) * emitSpacing;
+          // 根仅极小抖动（火舌细、紧贴燃边、不挤成一簇）
+          const ox = (Math.random() - 0.5) * 6;
+          const oy = (Math.random() - 0.5) * 6;
           spawnEmber(emitX[i] + ox, emitY[i] + oy, emitNX[i], emitNY[i], emitW[i]);
           spawned++;
         }
@@ -692,7 +695,7 @@ function runErode(
           i--;
           continue;
         }
-        const sway = Math.sin(a * 0.006 + eseed[i]) * 22;
+        const sway = Math.sin(a * 0.006 + eseed[i]) * 10; // 小幅摆动（短命下仅几 px，不横向铺开成团）
         ex[i] += (evx[i] + sway) * dt;
         ey[i] += evy[i] * dt;
         const life01 = a / life;
