@@ -461,14 +461,13 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：顶部+底部双起点相向推进，在「随 x 起伏的柔和曲线」上汇合 ----
-  // 用户要求：保留双起点、二者合理对接、不要写死一条横线。实现：
-  //  - 每一点取「先到达的前沿」min(顶前沿, 底前沿) 决定消散时刻 → 顶/底自然对接，无分段硬接缝；
-  //  - 汇合高度 convY 随 x 用平滑噪声起伏(±convAmp) → 汇合缝是一条波浪曲线，而非固定横线；
-  //  - 前沿用幂次 frontPow>1：靠近边界更快清空、靠近缝更慢，形成「前沿感」；
-  //  - 两侧(edge)略拖后做驼峰（中间快、边慢），保留破碎边缘的层次。
-  // 形态（dissolve 语义：T 小=先消散）：顶边/底边 T=0 最先清空，向缝收拢、缝最后清。
-  const featherMs = 90; // 羽化软边时间带宽（越大边缘越柔）
+  // ---- 消散时间场 T(x,y)：从若干随机源点「涟漪式」向外扩散 ----
+  // 取代旧方案（顶/底边整条边同时 T=0 发起 → 看起来像全底边齐发、缺乏明确起源点）。
+  // 现在每次播放随机选 1~2 个底部源点，T 以「到最近源点的归一化距离」为主驱动：
+  // 源点处 T≈0 最先消散，越远越晚，形成「从某点发起、向外蔓延」的涟漪；
+  // 源点位置(x/y)、发起时刻都随机 + fbm 噪声扰动 → 波峰（最远等值线）高低错落、每次不同，随机性足。
+  // dissolve 语义：T 小=先消散（源点先空）；materialize 用 Tm=wipe-T 反向 → 源点最后成形。
+  const featherMs = 90; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
   const mw = Math.max(8, Math.round(w * maskScale));
   const mh = Math.max(8, Math.round(h * maskScale));
@@ -483,35 +482,34 @@ function runGlow(
   const mimg = mctx.createImageData(mw, mh);
   const mpx32 = new Uint32Array(mimg.data.buffer); // 32 位写入，仅改最高字节(alpha)
 
-  // 噪声参数（保留随机破碎边缘，但幅度收紧——否则会抹平驼峰/双起点轮廓）
-  const noiseAmp = 55; // ±55ms：边缘随机破碎（小幅度，不破坏形态）
-  const jitterAmp = 18; // 细碎锯齿
-  const noiseScale = 1 / 42; // 主波长 ~42px
+  // 噪声参数：幅度略加大，边缘破碎 + 波峰起伏更明显（随机感更强）
+  const noiseAmp = 62; // ±62ms：边缘随机破碎
+  const jitterAmp = 22; // 细碎锯齿
+  const noiseScale = 1 / 38; // 主波长 ~38px
 
-  // 形态参数
-  const topTime = 0.56 * wipe;   // 顶前沿抵达中部的耗时（偏慢）
-  const botTime = 0.32 * wipe;   // 底前沿抵达中部的耗时（偏快，驼峰快速拱起）
-  const convAmp = 0.16;          // 汇合高度随 x 起伏幅度（高度比例）
-  const convFreq = 0.008;        // 汇合缝波浪频率（越大波浪越密）
-  const frontPow = 1.2;          // 前沿推进幂次（>1：边界快、缝慢，形成前沿感）
+  // 随机源点（每次播放重新生成 → 每次观感不同）
+  const diag = Math.hypot(w, h);
+  const sources: { x: number; y: number; t0: number }[] = [];
+  const nMain = 1 + (Math.random() < 0.35 ? 1 : 0); // 默认单点发起；35% 概率双源增加变化
+  for (let s = 0; s < nMain; s++) {
+    sources.push({
+      x: (0.12 + Math.random() * 0.76) * w, // 底部随机 x（偏中间，避免贴死角落）
+      y: h - Math.random() * 0.18 * h,       // 底部 0~18% 高度内随机（波峰随之高低错落）
+      t0: Math.random() * 0.10 * wipe,       // 各源发起时刻略错开，避免齐发
+    });
+  }
 
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻：取「最近源点」的扩散时刻
   const dissolveTimeAt = (nx: number, ny: number): number => {
-    const ny01 = ny / h; // 0=顶, 1=底
-    const nx01 = nx / w;
-    const edge = Math.abs(nx01 - 0.5) * 2; // 0=中, 1=边
-    // 该列汇合高度：中央附近随 x 平滑起伏 → 汇合缝是波浪曲线而非固定横线
-    let convY = 0.5 + (valueNoise1(nx * convFreq + 3.1, 7.7) * 2 - 1) * convAmp;
-    if (convY < 0.30) convY = 0.30;
-    else if (convY > 0.70) convY = 0.70;
-    // 各前沿到汇合缝的归一距离（0=边界先清，1=缝最后清）
-    const distTop = ny01 / convY;             // 顶 → 缝
-    const distBot = (1 - ny01) / (1 - convY); // 底 → 缝
-    // 前沿推进：幂次>1 形成前沿感；两侧(edge)略拖后做驼峰（中间快、边慢）
-    const tTop = topTime * Math.pow(distTop < 2 ? distTop : 2, frontPow) * (1 + 0.5 * edge * edge);
-    const tBot = botTime * Math.pow(distBot < 2 ? distBot : 2, frontPow) * (1 + 2.0 * edge * edge);
-    let T = Math.min(tTop, tBot);
-    // 随机破碎边缘（fbm 噪声 + 细碎抖动），让缝附近更碎，避免任何直线感
+    let best = Infinity;
+    for (let si = 0; si < sources.length; si++) {
+      const sp = sources[si];
+      const d = Math.hypot(nx - sp.x, ny - sp.y) / diag; // 0(源点)..~1(最远)
+      const Tsrc = sp.t0 + Math.pow(d, 0.82) * (wipe * 1.02);
+      if (Tsrc < best) best = Tsrc;
+    }
+    let T = best;
+    // 随机破碎边缘（fbm 噪声 + 细碎抖动）：让等值线起伏、波峰高低错落
     const n = fbm(nx * noiseScale, ny * noiseScale) * noiseAmp;
     const j = (hash2(Math.round(nx), Math.round(ny)) * 2 - 1) * jitterAmp;
     let Tf = T + n + j;
