@@ -343,6 +343,7 @@ function runGlow(
   const wipe = 1100; // 随机时间场 T(x,y) 主体消散/成形时长 ms（顶部+底部双起点相向推进，中央汇合）
   const endFade = 220; // 末端全局淡出带宽，避免被强制收尾硬切
   const duration = wipe + 480; // 总时长 ~1580ms（粒子收尾窗口长，细粒子持续飘散）
+  const emitWindow = 560; // 每个发射点在前沿扫过后持续涌出粒子的窗口 ms（上飘拖尾，使整片消散区连贯、上下两道在中间衔接）
 
   // ---- 粒子覆盖层 canvas ----
   const canvas = document.createElement("canvas");
@@ -517,11 +518,13 @@ function runGlow(
     return regionAngle[r];
   };
 
-  // ---- 粒子池（SoA + swap-remove）：容量按"前少后多"分布放大——
-  //   发射点按 emitW 递增爆发，后半段每点爆 2~7 粒，池子必须容纳得住，
-  //   否则 maxP 提前占满会导致后半段发射点被拒、粒子反而变少。
-  const totalTarget = Math.round(1800 + density * 2800); // 1800 ~ 4600
-  const maxP = totalTarget + 512;
+  // ---- 粒子池（SoA + swap-remove）----
+  // 采用「连续发射 + 峰值存活上限」模型：全局发射率由峰值存活数换算，池子只需容纳
+  // peakAlive + 余量；不会像旧版"每格一次性爆发"那样被早发光的边缘格子趁池未满占满，
+  // 导致中央（最后才扫到）格子被拒、留下一片无粒子空白。两道扫掠得以在中间用粒子衔接。
+  const peakAlive = Math.round(2600 + density * 3600); // 峰值存活粒子数 2600 ~ 6200（随强度）
+  const avgLife = 1150; // 粒子平均寿命 ms（把峰值存活换算成发射率）
+  const maxP = peakAlive + 1500; // 余量应对节流帧瞬时多发
   const px = new Float32Array(maxP);
   const py = new Float32Array(maxP);
   const pang = new Float32Array(maxP);
@@ -534,14 +537,14 @@ function runGlow(
   const psprite = new Uint16Array(maxP); // 颜色精灵索引
   let pcount = 0;
 
-  // ---- 发射点网格：铺满整面（更密），每个点在其 T 时刻正处破碎前沿上，爆发粒子 ----
+  // ---- 发射点网格：铺满整面（更密），每个点在前沿扫过后持续涌出粒子（见帧循环）----
   const emitSpacing = 9;
   const ecx = Math.max(2, Math.ceil(w / emitSpacing));
   const ecy = Math.max(2, Math.ceil(h / emitSpacing));
   const emitX = new Float32Array(ecx * ecy);
   const emitY = new Float32Array(ecx * ecy);
   const emitT = new Float32Array(ecx * ecy); // 各发射点被前沿扫到的时刻
-  const emitBurst = new Uint8Array(ecx * ecy); // 主爆发是否已触发
+  const emitAcc = new Float32Array(ecx * ecy); // 连续发射累积器（前沿扫过后持续涌出）
   const emitW = new Float32Array(ecx * ecy); // 发射权重：末段前沿大幅降权，避免粒子在终点堆成“墙”
   let ecount = 0;
   for (let iy = 0; iy < ecy; iy++) {
@@ -561,6 +564,11 @@ function runGlow(
       ecount++;
     }
   }
+  // 发射权重之和 + 全局发射率：把 peakAlive 换算成「粒子/ms」上限，再按各点 emitW 比例分配，
+  // 使整段动画匀速涌出、前后段都覆盖（含中央汇合区），杜绝池子被早发光格子占满而饿死中段。
+  let emitWSum = 0;
+  for (let i = 0; i < ecount; i++) emitWSum += emitW[i];
+  const emitRate = peakAlive / avgLife; // 粒子/ms 上限（实际因非全格同时活跃而更低）
 
   // ---- mask 裁切：把 T 场逐像素 alpha 渲染到蒙版 canvas，驱动便签随机破碎消散 ----
   // （替代旧版 clip-path 平滑多边形；与 erode.ts 同机制，前沿随机破碎、多起点发起）
@@ -724,7 +732,7 @@ function runGlow(
     prevNow = now;
     const age = now - start;
 
-    // ---- 推进随机破碎前沿：渲染 mask + 发射点按各自 T 时刻爆发粒子 ----
+    // ---- 推进随机破碎前沿：渲染 mask + 发射点按各自 T 时刻持续涌出粒子 ----
     pushMask(age, false);
     // materialize：opacity 随帧淡入（0→1，主体时长内完成）——配合 mask 成形，
     // 即使 mask 解码慢/失败也不会卡在空白；dissolve 保持不透明（由 mask 控制消散）。
@@ -734,18 +742,18 @@ function runGlow(
       else if (op > 1) op = 1;
       root.style.opacity = op.toFixed(3);
     }
-    const burstN = 4 + Math.round(density * 7); // 每个前沿点爆发 4~11 粒（更密实）
+    // 连续发射：每个发射点在前沿扫过后的 emitWindow 内持续涌出粒子（按 emitW 分配速率），
+    // 形成"整片消散区不断有粒子上飘"的连贯拖尾，让顶部/底部两道扫掠在中间用粒子自然衔接。
+    const invWS = emitRate / emitWSum; // 每单位 emitW 对应的粒子/ms
     for (let i = 0; i < ecount; i++) {
       const T = emitT[i];
-      if (age < T) continue;
-      if (!emitBurst[i]) {
-        // 前沿刚扫到：爆发一簇细粒子（粒子紧密贴合破碎边缘喷出）
-        emitBurst[i] = 1;
-        const bn = Math.max(1, Math.round(burstN * emitW[i])); // 末段前沿爆发数大幅减少
-        for (let k = 0; k < bn; k++) spawn(emitX[i], emitY[i], age);
-      } else if (age < T + 150 && Math.random() < 0.25 * emitW[i]) {
-        // 前沿过后短暂尾随少量粒子（余烬渐熄）；末段同样抑制
+      if (age < T || age > T + emitWindow) continue;
+      emitAcc[i] += dt * 1000 * invWS * emitW[i];
+      let guard = 0;
+      while (emitAcc[i] >= 1 && guard < 6) {
+        emitAcc[i] -= 1;
         spawn(emitX[i], emitY[i], age);
+        guard++;
       }
     }
 
