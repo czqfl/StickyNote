@@ -4,15 +4,16 @@
 // 触发：关闭窗口（dissolve）/ 呼出窗口（materialize，互为倒放）。
 // 两个方向**共用同一套粒子系统** → 粒子的形态 / 大小 / 颜色表现完全一致（仅运动方向相反）。
 //
-// 视觉要点（波峰消散 · 四边汇合）：
-// - 四边随机消散：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切，时间场由「四边随机源点」
-//   涟漪式向外扩散叠加而成——底部 / 顶部 / 左 / 右 各随机布点，每点带随机发起时刻与随机速度，
-//   使每次消散的波前形态都不同；四个方向的消散前沿最终在中央汇合、界面完全消失。
-// - 下方快上方慢：底部源点 scale 小（前沿快）、顶部源点 scale 大（前沿慢），左右中等——
-//   整体呈「下消上慢」的非对称推进，模拟真实物理的下坠消散感。
-// - 底部波峰（∩ 形）：底部仅在中线附近放「快源」，两侧不放快源 → 中线附近先空、边界上移（高），
-//   两侧源点远、最后才空、边界下垂（低），便签底边自然形成「中间高、两边低」的波峰拱形；
-//   边缘为光滑连续曲线（不叠加噪声），无锯齿无断裂。
+// 视觉要点（点纸式燃烧 · 方向性速度）：
+// - 方向性燃烧：像点燃一张纸，燃烧速度按方向/位置分层——底部点火向上最快（火焰向上、
+//   优先烧掉上方的纸）、侧边中速（向四周蔓延）、顶部最慢（上面没有纸，只能向下，且前沿
+//   呈「水平缓弧」缓慢下推）。
+// - 底部 ∩ 山峰：底部在中线附近点火，中线向上粒子化最快 → 前沿呈「∩ 山峰」形向上扩张
+//   （中间先空、边界上移）；随高度升高山峰逐渐变平，到顶部变为水平缓弧。
+// - 单条连续前沿：时间场由「高度场扫掠」+「方向性燃烧项」构造（非多源圆涟漪），
+//   前沿始终是单条连续曲线，无圆洞/补丁。
+// - 柔和随机：前沿带克制幅度的弯曲——几个大的缓弯 + 细碎小弯，波动不大
+//   （尤其顶部保持水平、不剧烈起伏，符合物理）。
 // - 粒子一律向上飘：粒子生成后方向**锁死为向上**（pang≈0 ± 发散角），仅保留轻微横向抖动，
 //   不再沿边缘法线四散——所有微粒都朝上方升起、边升边淡出，呈现“被托起升空”的消散感。
 // - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散，不破坏整体上升一致性。
@@ -422,15 +423,16 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：四边随机源点「涟漪式」向外扩散，最终中央汇合 ----
-  // 每次播放随机在 底/顶/左/右 各布若干源点：源点位置(x/y)、发起时刻、速度都随机
-  // → 每次消散的波前形态都不同；四方向的消散前沿最终在便签中央汇合、整体消失。
-  // 速度不对称（下快上慢）：底部 scale 小（前沿快）、顶部 scale 大（前沿慢）、左右中等——
-  // 模拟真实物理的下坠消散感。
-  // 底部波峰（∩ 形）：底部只在「中线附近」放快源（≈1 个，x 紧贴中心），两侧不放快源 →
-  // 中线附近先空、边界上移（高），而底部两侧离任何源都远、最后才空、边界下垂（低），
-  // 便签底边自然形成「中间高、两边低」的波峰拱形。
-  // dissolve 语义：T 小=先消散（源点先空）；materialize 用 Tm=wipe-T 反向 → 源点最后成形。
+  // ---- 消散时间场 T(x,y)：方向性燃烧速度（模拟点纸，非圆涟漪）----
+  // 像点燃一张纸：燃烧速度按方向/位置分层——
+  //   · 底部点火：火焰向上，优先烧掉上方的纸 → 向上粒子化最快，前沿呈「∩ 山峰」形向上扩张
+  //     （中间先空、边界上移）；随高度升高山峰逐渐变平；
+  //   · 顶部：上方没有纸、只能向下蔓延 → 最慢，且前沿呈「水平缓弧」缓慢下推（波动小、比较平）；
+  //   · 侧边：向中央/四周中速蔓延（介于底部与顶部之间）。
+  // 实现：高度场扫掠模型（单条连续前沿，无圆洞/补丁）——
+  //   T = 基础扫掠(下快上慢, q^1.8) + 底部∩山峰(随高度衰减→顶部变平) + 左右边缘中速吃入
+  //       + 克制幅度的柔和弯曲（几个大缓弯 + 细碎小弯，顶部波动小）。
+  // dissolve 语义：T 小=先消散（源点先空）；materialize 用 wipe-T 反向。
   const featherMs = 90; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
   const mw = Math.max(8, Math.round(w * maskScale));
@@ -446,61 +448,57 @@ function runGlow(
   const mimg = mctx.createImageData(mw, mh);
   const mpx32 = new Uint32Array(mimg.data.buffer); // 32 位写入，仅改最高字节(alpha)
 
-  // 平滑边缘：不叠加任何噪声/抖动，时间场 T 为纯连续函数 → 消散边缘光滑无锯齿。
+  // 方向性燃烧参数（每次播放重新生成 → 每次观感不同）
+  const leadIn = 40;  // 点火前导：极底边不会在 t=0 瞬间全没
+  const peakAmp = 95; // ∩ 山峰强度（ms）：底部中心提前烧（最快）
+  const peakW = 0.15; // ∩ 山峰宽度（w 比例）
+  const sideAmp = 130; // 左右边缘吃入强度（ms）：中速
+  const sideW = 0.13;  // 左右边缘吃入宽度（w 比例）
+  const cx = (0.5 + (Math.random() - 0.5) * 0.30) * w; // 底部点火点 x（中线附近随机）
+  const noisePhase = Math.random() * 100; // 噪声相位随机 → 每次前沿弯曲不同
 
-  // 随机源点（每次播放重新生成 → 每次观感不同）
-  const diag = Math.hypot(w, h);
-  interface DissolveSource { x: number; y: number; t0: number; scale: number }
-  const sources: DissolveSource[] = [];
-  // 底部：1 个「中线附近」快源（形成底部波峰的“高”——中线先空、边界上移）；
-  // scale 最小（最快），使底部整体快于顶部。x 紧贴中心 ±一小段，保证“中间高”。
-  sources.push({
-    x: (0.5 + (Math.random() - 0.5) * 0.30) * w, // 中线附近 ±15%
-    y: h - Math.random() * 0.16 * h,               // 底部 0~16% 高度内随机
-    t0: Math.random() * 0.08 * wipe,
-    scale: 0.98,                                  // 底部：最快
-  });
-  // 顶部：1 个随机点，scale 最大（最慢）→ 上方消散慢
-  sources.push({
-    x: (0.12 + Math.random() * 0.76) * w,
-    y: Math.random() * 0.16 * h,
-    t0: Math.random() * 0.06 * wipe,
-    scale: 1.6,                                   // 顶部：最慢（与底部 0.98 形成明显速度差）
-  });
-  // 左侧：1~2 个随机点，中等速度
-  const nLeft = 1 + (Math.random() < 0.5 ? 1 : 0);
-  for (let s = 0; s < nLeft; s++) {
-    sources.push({
-      x: Math.random() * 0.16 * w,
-      y: (0.12 + Math.random() * 0.76) * h,
-      t0: Math.random() * 0.08 * wipe,
-      scale: 1.25,
-    });
-  }
-  // 右侧：1~2 个随机点，中等速度
-  const nRight = 1 + (Math.random() < 0.5 ? 1 : 0);
-  for (let s = 0; s < nRight; s++) {
-    sources.push({
-      x: w - Math.random() * 0.16 * w,
-      y: (0.12 + Math.random() * 0.76) * h,
-      t0: Math.random() * 0.08 * wipe,
-      scale: 1.25,
-    });
-  }
+  // 确定性值噪声：提供「几个大的缓弯 + 细碎小弯」，幅度克制（波动不大，顶部保持水平）。
+  const hash01 = (n: number): number => {
+    const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  };
+  const valueNoise = (x: number, y: number): number => {
+    const ix = Math.floor(x), iy = Math.floor(y);
+    const fx = x - ix, fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    const a = hash01(ix + iy * 57.31);
+    const b = hash01(ix + 1 + iy * 57.31);
+    const c = hash01(ix + (iy + 1) * 57.31);
+    const d = hash01(ix + 1 + (iy + 1) * 57.31);
+    return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+  };
+  // 柔和弯曲：低频大缓弯（~2-3 个）＋ 高频小碎弯；底部（∩ 主导）弱化、中上部完整 → 顶部水平波动小。
+  const gentleNoise = (nx: number, ny: number): number => {
+    const q = (h - ny) / h;
+    const amp = 0.4 + 0.6 * q;
+    return amp * (
+      32 * (valueNoise(nx * 0.0055 + noisePhase, ny * 0.004) * 2 - 1) +
+      20 * (valueNoise(nx * 0.012 + 7.3 + noisePhase, ny * 0.009 + 1.7) * 2 - 1) +
+      10 * (valueNoise(nx * 0.05 + 3.1, ny * 0.03 + 4.2) * 2 - 1) +
+       6 * (valueNoise(nx * 0.11 + 9.7, ny * 0.07 + 8.4) * 2 - 1)
+    );
+  };
 
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻：取「最近源点」的扩散时刻
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻：高度场扫掠 + 方向性燃烧项
   const dissolveTimeAt = (nx: number, ny: number): number => {
-    let best = Infinity;
-    for (let si = 0; si < sources.length; si++) {
-      const sp = sources[si];
-      const d = Math.hypot(nx - sp.x, ny - sp.y) / diag; // 0(源点)..~1(最远)
-      const Tsrc = sp.t0 + Math.pow(d, 0.82) * (wipe * sp.scale);
-      if (Tsrc < best) best = Tsrc;
-    }
-    let Tf = best;
-    if (Tf < 0) Tf = 0;
-    else if (Tf > wipe - featherMs) Tf = wipe - featherMs;
-    return Tf;
+    const q = (h - ny) / h; // 0 底 .. 1 顶
+    // 基础扫掠：下快上慢（凸曲线，q 大=顶部更慢）
+    let T = leadIn + (wipe - leadIn) * Math.pow(q, 1.8);
+    // ∩ 山峰：底部中心提前烧（峰随高度衰减 → 顶部变水平）
+    T -= peakAmp * Math.exp(-Math.pow((nx - cx) / (peakW * w), 2)) * Math.pow(1 - q, 0.9);
+    // 侧边：左右边缘提前烧（中速吃入，中部最强、两端弱）
+    T -= sideAmp * (Math.exp(-Math.pow(nx / (sideW * w), 2)) + Math.exp(-Math.pow((w - nx) / (sideW * w), 2)))
+       * Math.pow(q, 0.75) * Math.pow(1 - q, 0.5);
+    // 柔和弯曲（幅度克制）
+    T += gentleNoise(nx, ny);
+    if (T < 0) T = 0;
+    else if (T > wipe - featherMs) T = wipe - featherMs;
+    return T;
   };
 
   // 烘焙到蒙版分辨率
