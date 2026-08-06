@@ -544,8 +544,8 @@ function runGlow(
   const emitX = new Float32Array(ecx * ecy);
   const emitY = new Float32Array(ecx * ecy);
   const emitT = new Float32Array(ecx * ecy); // 各发射点被前沿扫到的时刻
-  const emitAcc = new Float32Array(ecx * ecy); // 连续发射累积器（前沿扫过后持续涌出）
   const emitW = new Float32Array(ecx * ecy); // 发射权重：末段前沿大幅降权，避免粒子在终点堆成“墙”
+  const activeIdx = new Int32Array(ecx * ecy); // 帧内“处于激活窗口”的发射点索引（持续涌出粒子）
   let ecount = 0;
   for (let iy = 0; iy < ecy; iy++) {
     for (let ix = 0; ix < ecx; ix++) {
@@ -564,11 +564,10 @@ function runGlow(
       ecount++;
     }
   }
-  // 发射权重之和 + 全局发射率：把 peakAlive 换算成「粒子/ms」上限，再按各点 emitW 比例分配，
-  // 使整段动画匀速涌出、前后段都覆盖（含中央汇合区），杜绝池子被早发光格子占满而饿死中段。
-  let emitWSum = 0;
-  for (let i = 0; i < ecount; i++) emitWSum += emitW[i];
-  const emitRate = peakAlive / avgLife; // 粒子/ms 上限（实际因非全格同时活跃而更低）
+  // 全局发射率：把峰值存活数换算成「粒子/ms」上限（peakAlive / 平均寿命）；
+  // 每帧按该速率从“激活窗口内”的发射点中加权采样生成，使整段动画匀速涌出、
+  // 顶/底两道前沿同时持续冒粒子并在中央汇合，绝不出现中段空白。
+  const emitRate = peakAlive / avgLife; // 粒子/ms
 
   // ---- mask 裁切：把 T 场逐像素 alpha 渲染到蒙版 canvas，驱动便签随机破碎消散 ----
   // （替代旧版 clip-path 平滑多边形；与 erode.ts 同机制，前沿随机破碎、多起点发起）
@@ -673,6 +672,7 @@ function runGlow(
   let lastPaint = 0;
   let endedLocal = false;
   let watchdog = 0;
+  let spawnAcc = 0; // 跨帧累积的“应生成粒子数”小数残量
 
   const stopLoop = () => {
     endedLocal = true;
@@ -742,18 +742,35 @@ function runGlow(
       else if (op > 1) op = 1;
       root.style.opacity = op.toFixed(3);
     }
-    // 连续发射：每个发射点在前沿扫过后的 emitWindow 内持续涌出粒子（按 emitW 分配速率），
-    // 形成"整片消散区不断有粒子上飘"的连贯拖尾，让顶部/底部两道扫掠在中间用粒子自然衔接。
-    const invWS = emitRate / emitWSum; // 每单位 emitW 对应的粒子/ms
+    // 连续发射：每帧从“正处于激活窗口（前沿扫过后的 emitWindow 内）”的发射点中，
+    // 按 emitW 加权随机采样若干点生成粒子。这种“全局速率直接落地”的做法不受
+    // “每点累积到 1 才发”的阈值限制（旧版因此阈值永远到不了 → 几乎不冒粒子）；
+    // 顶/底两道前沿每帧都在冒粒子，随窗口推进连续向中央汇合，中段不会空。
+    let activeCount = 0;
+    let activeMaxW = 0;
     for (let i = 0; i < ecount; i++) {
       const T = emitT[i];
-      if (age < T || age > T + emitWindow) continue;
-      emitAcc[i] += dt * 1000 * invWS * emitW[i];
-      let guard = 0;
-      while (emitAcc[i] >= 1 && guard < 6) {
-        emitAcc[i] -= 1;
-        spawn(emitX[i], emitY[i], age);
-        guard++;
+      if (age >= T && age <= T + emitWindow) {
+        activeIdx[activeCount++] = i;
+        if (emitW[i] > activeMaxW) activeMaxW = emitW[i];
+      }
+    }
+    if (activeCount > 0) {
+      spawnAcc += emitRate * dt * 1000; // 该帧应生成的粒子总数（含小数残量累积）
+      let n = Math.floor(spawnAcc);
+      spawnAcc -= n;
+      if (n > 400) n = 400; // 兜底：节流长帧也不会一次喷爆池子
+      for (let k = 0; k < n; k++) {
+        // 按 emitW 拒绝采样选一个激活点（权重高的点更常被选中 → 后段/中央更多粒子）
+        let idx = activeIdx[(Math.random() * activeCount) | 0];
+        for (let tr = 0; tr < 5; tr++) {
+          const cand = activeIdx[(Math.random() * activeCount) | 0];
+          if (Math.random() * activeMaxW <= emitW[cand]) {
+            idx = cand;
+            break;
+          }
+        }
+        spawn(emitX[idx], emitY[idx], age);
       }
     }
 
