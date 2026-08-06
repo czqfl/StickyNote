@@ -1678,6 +1678,35 @@ body,
   opacity: 0.85;
 }
 
+/* 右下角自定义缩放手柄：替代系统 resize 边框（避免透明窗口白屏 / 投影边框）。
+   尺寸刻意做小（命中区 14px、图标 11px），仅在悬停 / 拖拽时提亮，平时低调不抢眼。 */
+.win-resizer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 2px;
+  cursor: nwse-resize;
+  z-index: 30;
+  color: var(--text-hint);
+  opacity: 0.5;
+  transition: opacity 0.12s ease, color 0.12s ease;
+  touch-action: none; /* 触屏 / 笔不触发滚动，保证 pointer 拖拽缩放生效 */
+}
+.win-resizer:hover,
+.win-resizer:active {
+  opacity: 0.95;
+  color: var(--accent);
+}
+.win-resizer-grip {
+  display: block;
+  pointer-events: none; /* 让 pointer 事件落到 .win-resizer 本身 */
+}
+
 .translate-head {
   display: flex;
   align-items: center;

@@ -28,6 +28,9 @@
 
 let eroding = false;
 let materializing = false;
+/** 动画代次：每次 runErode 启动 +1。上一轮动画遗留的延时清理（cleanupAfterHide）凭此作废，
+ *  避免快速呼出时把正在播放的新动画便签裁掉/隐藏（见 cleanupAfterHide 守卫）。 */
+let erodeGen = 0;
 
 /** 当前侵蚀动画的“立即中止”句柄（由 runErode 注册；cancelErode 调用）。
  *  中止 = 停帧 + 复原页面（保持可见，供“呼出打断关闭”等快速切换）。 */
@@ -196,15 +199,17 @@ function runErode(
   particleDensity: number,
   onDone: () => void,
 ): () => void {
+  const myGen = ++erodeGen; // 本动画实例代次：作废上一轮遗留的延时清理
   const isDissolve = direction === "dissolve";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  // 内容尺寸（便签本体）：动画开始前窗口尚未扩大，innerWidth/Height 即便签尺寸。
   const w = window.innerWidth;
   const h = window.innerHeight;
 
   // ---- 时序参数 ----
   const wipe = 1000; // 消散 / 成形主体时长 ms（用户要求约 1 秒）
   const featherMs = 90; // 羽化软边时间带宽（越大边缘越柔）
-  const tailMs = isDissolve ? 380 : 120; // 余烬飘散收尾（成形更短）
+  const tailMs = isDissolve ? 520 : 160; // 余烬飘散收尾（延长让火星飘更久；成形更短）
   const duration = wipe + tailMs;
 
   // ---- 蒙版：低分辨率逐像素 alpha（mask-size:100% 100% 上采样柔化）----
@@ -289,45 +294,114 @@ function runErode(
   canvas.style.pointerEvents = "none";
   canvas.style.transform = "translateZ(0)";
   document.body.appendChild(canvas);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
+  // ---- 余烬渲染：WebGL 点精灵（单次 draw call + GPU additive），替代 Canvas2D 逐粒 drawImage ----
+  const gl = canvas.getContext("webgl", {
+    alpha: true,
+    premultipliedAlpha: false,
+    antialias: false,
+    depth: false,
+  });
+  if (!gl) {
     canvas.remove();
     finishEarly();
     return () => {};
   }
-  ctx.scale(dpr, dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.disable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // additive 辉光（等同 2D 的 globalCompositeOperation="lighter"）
 
-  // 余烬精灵：三档温度（白热点 / 橙 / 暗红），粒子随生命冷却变色、收缩。
-  // 出生即在侵蚀前沿处最热最亮，离开前沿后逐渐冷却——与边缘物理联动更直观。
-  const SS = 10;
-  const makeSprite = (stops: [number, string][]): HTMLCanvasElement => {
-    const c = document.createElement("canvas");
-    c.width = SS;
-    c.height = SS;
-    const sctx = c.getContext("2d");
-    if (sctx) {
-      const g = sctx.createRadialGradient(SS / 2, SS / 2, 0, SS / 2, SS / 2, SS / 2);
-      for (const [pos, col] of stops) g.addColorStop(pos, col);
-      sctx.fillStyle = g;
-      sctx.fillRect(0, 0, SS, SS);
+  // 着色器：顶点把 CSS 像素坐标转 clip 空间（y 翻转）；片元用 gl_PointCoord 程序化软辉光。
+  // 火色由 CPU 端按粒子生命插值后随顶点属性传入，替代 3 档预渲染精灵。
+  const VERT = `
+    attribute vec2 a_pos;
+    attribute float a_size;
+    attribute float a_alpha;
+    attribute vec3 a_color;
+    attribute float a_core;
+    uniform vec2 u_resCss;
+    uniform float u_dpr;
+    varying float v_alpha;
+    varying vec3 v_color;
+    varying float v_core;
+    void main() {
+      vec2 clip = vec2(
+        a_pos.x / u_resCss.x * 2.0 - 1.0,
+        1.0 - a_pos.y / u_resCss.y * 2.0
+      );
+      gl_Position = vec4(clip, 0.0, 1.0);
+      gl_PointSize = a_size * 2.0 * u_dpr;
+      v_alpha = a_alpha;
+      v_color = a_color;
+      v_core = a_core;
+    }`;
+  const FRAG = `
+    precision mediump float;
+    varying float v_alpha;
+    varying vec3 v_color;
+    varying float v_core;
+    void main() {
+      vec2 c = gl_PointCoord - vec2(0.5);
+      float d = length(c);
+      float glow = smoothstep(0.5, 0.0, d); // 中心亮、边缘柔化到 0
+      // 白热核心只在该粒子最出生的极小中心、且最年轻时出现（pow(glow,4) 把白核压成针尖大小）；
+      // 其余区域一律是 v_color 的橙黄火色——否则白核太大、加性叠加会把整片前沿饱和成纯白。
+      vec3 col = mix(v_color, vec3(1.0, 0.96, 0.86), v_core * pow(glow, 4.0));
+      float a = glow * v_alpha;
+      gl_FragColor = vec4(col, a); // 配合 SRC_ALPHA,ONE 实现 additive 辉光
+    }`;
+  const compile = (type: number, src: string): WebGLShader | null => {
+    const sh = gl.createShader(type);
+    if (!sh) return null;
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error("erode 着色器编译失败:", gl.getShaderInfoLog(sh));
+      return null;
     }
-    return c;
+    return sh;
   };
-  const spriteHot = makeSprite([
-    [0, "rgba(255,252,240,1)"],
-    [0.3, "rgba(255,220,150,0.9)"],
-    [1, "rgba(255,180,90,0)"],
-  ]);
-  const spriteMid = makeSprite([
-    [0, "rgba(255,210,140,1)"],
-    [0.35, "rgba(255,150,60,0.8)"],
-    [1, "rgba(255,110,40,0)"],
-  ]);
-  const spriteCool = makeSprite([
-    [0, "rgba(255,150,80,0.9)"],
-    [0.4, "rgba(200,80,30,0.6)"],
-    [1, "rgba(140,50,20,0)"],
-  ]);
+  const vs = compile(gl.VERTEX_SHADER, VERT);
+  const fs = compile(gl.FRAGMENT_SHADER, FRAG);
+  const program = gl.createProgram();
+  if (!vs || !fs || !program) {
+    canvas.remove();
+    finishEarly();
+    return () => {};
+  }
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error("erode 着色器链接失败:", gl.getProgramInfoLog(program));
+    canvas.remove();
+    finishEarly();
+    return () => {};
+  }
+  gl.useProgram(program);
+  const a_pos = gl.getAttribLocation(program, "a_pos");
+  const a_size = gl.getAttribLocation(program, "a_size");
+  const a_alpha = gl.getAttribLocation(program, "a_alpha");
+  const a_color = gl.getAttribLocation(program, "a_color");
+  const a_core = gl.getAttribLocation(program, "a_core");
+  const u_resCss = gl.getUniformLocation(program, "u_resCss");
+  const u_dpr = gl.getUniformLocation(program, "u_dpr");
+  gl.uniform2f(u_resCss, w, h);
+  gl.uniform1f(u_dpr, dpr);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  const STRIDE = 8 * 4; // 字节：x,y,size,alpha,r,g,b,core
+  gl.enableVertexAttribArray(a_pos);
+  gl.vertexAttribPointer(a_pos, 2, gl.FLOAT, false, STRIDE, 0);
+  gl.enableVertexAttribArray(a_size);
+  gl.vertexAttribPointer(a_size, 1, gl.FLOAT, false, STRIDE, 8);
+  gl.enableVertexAttribArray(a_alpha);
+  gl.vertexAttribPointer(a_alpha, 1, gl.FLOAT, false, STRIDE, 12);
+  gl.enableVertexAttribArray(a_color);
+  gl.vertexAttribPointer(a_color, 3, gl.FLOAT, false, STRIDE, 16);
+  gl.enableVertexAttribArray(a_core);
+  gl.vertexAttribPointer(a_core, 1, gl.FLOAT, false, STRIDE, 28);
+  const loseCtx = gl.getExtension("WEBGL_lose_context");
 
   // 发射点网格：铺满整面，位于锯齿侵蚀前沿上（每个点在其 T 时刻正处前沿）。
   // 预计算各点的**边缘法线**（T 场梯度方向 = 前沿推进方向），粒子沿法线喷射，
@@ -341,7 +415,6 @@ function runErode(
   const emitT = new Float32Array(ecx * ecy); // 各发射点被前沿扫到的时刻
   const emitNX = new Float32Array(ecx * ecy); // 边缘法线（单位向量，指向前沿推进方向）
   const emitNY = new Float32Array(ecx * ecy);
-  const emitBurst = new Uint8Array(ecx * ecy); // 主爆发是否已触发
   const emitW = new Float32Array(ecx * ecy); // 发射权重：末段前沿大幅降权，避免火星在终点堆成“墙”
   let ecount = 0;
   const GRAD_EPS = 4;
@@ -370,8 +443,8 @@ function runErode(
     }
   }
 
-  // 余烬粒子池（SoA + swap-remove），数量随强度大幅提升
-  const maxEmbers = Math.round(360 + density * 1240); // 360 ~ 1600
+  // 余烬粒子池（SoA + swap-remove）：寿命改短后同屏存活数大幅下降，池可相应缩小。
+  const maxEmbers = Math.round(1100 + density * 2200); // 1100 ~ 3300（短命贴边，配合帧上限防开头爆满）
   const ex = new Float32Array(maxEmbers);
   const ey = new Float32Array(maxEmbers);
   const evx = new Float32Array(maxEmbers);
@@ -381,22 +454,27 @@ function runErode(
   const esize = new Float32Array(maxEmbers);
   const eseed = new Float32Array(maxEmbers);
   let emberCount = 0;
+  // GPU 上传缓冲：每粒 8 float（x, y, size, alpha, r, g, b, core），每帧重写后单次 bufferData
+  const glData = new Float32Array(maxEmbers * 8);
 
   // 在前沿点 (x,y) 沿边缘法线 (nmx,nmy) 喷出一粒火星。w 为发射权重（末段小 → 火星更小更弱）。
-  // 速度 = 法线喷射(贴合边缘方向) + 上升浮力 + 随机湍流；法线让竖直锯齿段把粒子甩向侧向。
+  // 关键：推力小、寿命短 → 单粒紧贴出生边、火舌只舔出一小段（约 10~20px），
+  // 不飞散成团；“持久”由沿燃烧边**持续 spawn**（细水长流）保证，而非单粒长命漂走。
+  // 法线让水平段向上喷、竖直锯齿段向侧向喷 → 粒子流贴合破碎边缘几何、与燃边紧密联动。
   const spawnEmber = (x: number, y: number, nmx: number, nmy: number, w: number) => {
     if (emberCount >= maxEmbers) return;
     const i = emberCount++;
-    ex[i] = x + (Math.random() - 0.5) * 5;
+    ex[i] = x + (Math.random() - 0.5) * 4;
     ey[i] = y + (Math.random() - 0.5) * 4;
-    const kick = (30 + Math.random() * 70) * (0.5 + 0.5 * w); // 末段更弱
+    const kick = (16 + Math.random() * 26) * (0.5 + 0.5 * w); // 小推力：火舌贴边、不飞散成团
     // materialize 时前沿推进方向与 dissolve 相反，法线取反保持"沿推进方向喷"
     const dir = isDissolve ? 1 : -1;
-    evx[i] = nmx * kick * dir + (Math.random() - 0.5) * 30;
-    evy[i] = nmy * kick * dir - (46 + Math.random() * 96);
-    elife[i] = 320 + Math.random() * 560;
+    // 沿边缘法线小推力（贴合边缘几何）+ 轻微上升浮力（火舌向上舔）+ 极小湍流（不横向铺开）
+    evx[i] = nmx * kick * dir + (Math.random() - 0.5) * 10;
+    evy[i] = nmy * kick * dir - (28 + Math.random() * 46);
+    elife[i] = 150 + Math.random() * 200; // 0.15~0.35s：短命→每粒紧贴出生边、不漂成团；持久由沿边持续 spawn 保证
     eage[i] = 0;
-    esize[i] = (1.4 + Math.random() * 2.8) * (0.45 + 0.55 * w); // 末段更小
+    esize[i] = (2.6 + Math.random() * 3.8) * (0.5 + 0.5 * w); // 更大更厚；末段更小
     eseed[i] = Math.random() * Math.PI * 2;
   };
 
@@ -437,9 +515,14 @@ function runErode(
     mctx.putImageData(img, 0, 0);
   };
 
-  // 蒙版替换：先解码（new Image onload）再 set，避免逐帧 dataURL 闪烁
+  // 蒙版替换：先解码（new Image onload）再 set，避免逐帧 dataURL 闪烁。
+  // 关键：用 lastAppliedSeq 跟踪「已应用的最新帧序号」——只丢弃比已应用更旧的帧，
+  // 绝不能用 seq !== maskSeq 丢弃（否则 Image 解码慢于推帧间隔(30ms)时，中间所有帧都会被
+  // 判为"非最新"而丢弃，setMask 直到最后一帧才执行 → materialize 的 mask 永远停在全透明、
+  // 便签被透明 mask 藏住、直到收尾 restoreRoot 才"瞬间出现"，表现为"只有粒子、没有便签"）。
   let lastMaskPush = -1;
-  let maskSeq = 0; // 防乱序：Image 解码异步且不保证按序回调，旧帧晚到会覆盖新帧
+  let maskSeq = 0;
+  let lastAppliedSeq = 0; // 已应用的最大帧序号
   const pushMask = (age: number, force: boolean): void => {
     if (!force && age - lastMaskPush < 30) return; // ~30Hz 更新蒙版即可（羽化边缘平滑）
     lastMaskPush = age;
@@ -447,9 +530,24 @@ function runErode(
     const url = maskCanvas.toDataURL();
     const seq = ++maskSeq;
     const im = new Image();
-    im.onload = () => {
-      if (endedLocal || seq !== maskSeq) return; // 只应用最新一帧，丢弃迟到的旧帧
+    const apply = (): void => {
+      if (endedLocal || seq < lastAppliedSeq) return; // 丢弃比已应用更旧的帧（防乱序回退）
+      lastAppliedSeq = seq;
       setMask(url);
+    };
+    im.onload = apply;
+    im.onerror = () => {
+      // 解码失败兜底：materialize 直接显示本体（清 mask + 还原 opacity），避免卡在空白等看门狗；
+      // dissolve 本体本就可见，mask 仅增强裁切，解码失败可忽略。
+      if (endedLocal || isDissolve || seq < lastAppliedSeq) return;
+      lastAppliedSeq = seq;
+      try {
+        root.style.opacity = "1";
+        root.style.setProperty("-webkit-mask-image", "");
+        root.style.setProperty("mask-image", "");
+      } catch {
+        /* ignore */
+      }
     };
     im.src = url;
   };
@@ -505,6 +603,9 @@ function runErode(
   }
 
   const cleanupAfterHide = () => {
+    // 代次守卫：若已启动新动画（erodeGen 改变），本实例的延时清理作废，
+    // 否则会把正在播放的新动画便签裁掉/隐藏（快速关闭后立刻呼出时会触发）。
+    if (myGen !== erodeGen) return;
     stopLoop();
     // 保持"空画面"供下次呼出（契约同 dissolve.ts cleanup）
     blankRoot(root);
@@ -513,18 +614,33 @@ function runErode(
     } catch {
       /* ignore */
     }
+    try {
+      loseCtx?.loseContext(); // 释放 GPU 资源，避免透明窗口下上下文泄漏
+    } catch {
+      /* ignore */
+    }
     eroding = false;
   };
 
   const finishMaterialize = () => {
     stopLoop();
-    restoreRoot(root);
-    try {
-      canvas.remove();
-    } catch {
-      /* ignore */
-    }
+    if (myGen !== erodeGen) return; // 已被新动画接管：勿复位其样式
     materializing = false;
+    // 让“便签已完整显现”的最后一帧先提交，再移除覆盖层与复位样式，避免收尾闪一下。
+    requestAnimationFrame(() => {
+      if (myGen !== erodeGen) return; // 期间已启动新动画：勿复位其样式
+      try {
+        canvas.remove();
+      } catch {
+        /* ignore */
+      }
+      try {
+        loseCtx?.loseContext(); // 释放 GPU 资源，避免透明窗口下上下文泄漏
+      } catch {
+        /* ignore */
+      }
+      restoreRoot(root);
+    });
   };
 
   const frame = (now: number) => {
@@ -542,58 +658,95 @@ function runErode(
     pushMask(age, false);
     applyOpacity(age);
 
-    // ---- 余烬：前沿到达时爆发 + 短暂尾随火花 + 更新 + 绘制 ----
-    ctx.clearRect(0, 0, w, h);
+    // ---- 余烬：随燃烧前沿推进、沿边持续渗出（细水长流）+ 更新 + 绘制 ----
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     if (age < wipe + 60) {
-      const burstN = 2 + Math.round(density * 5); // 每个前沿点爆发 2~7 粒
+      // 燃烧边缘 = 该点 mask 从“可见”变“透明”的过渡带（age ∈ [T, T+featherMs]）。
+      // 火星根必须落在窗口 [T+burstAt, T+winEnd] 内：
+      //   - burstAt=featherMs/2：等到半透明边才点燃 → 根对齐“正在燃烧”处，不滞后已烧黑区；
+      //   - winEnd=featherMs+360：火舌飘离前沿一小段再熄，根随前沿推进而上移。
+      // 每个点在其窗口内**每帧低概率 spawn 1 粒**（而非一次性爆发一大簇），于是：
+      //   - 整段动画期间只要还有点处于窗口就持续冒 → 后边也出现（旧版一次爆发 + 长寿命把池塞满→后边寂灭）；
+      //   - 根沿边缘铺开、连续渗出的火舌，而不是一上来全屏齐发成“一团”。
+      const burstAt = featherMs * 0.5; // 相对 T：等到半透明边才点燃
+      const winEnd = featherMs + 150;  // 火舌稍离前沿即熄（短命已保证贴边；不再长尾随拖出已烧黑区火云）
+      // 全局每帧 spawn 上限：防止开头一帧把粒子池塞满、导致后续燃到的点 spawn 不到空位（后边寂灭）。
+      // 配合短寿命，粒子在整段动画里均匀周转、持续可见。
+      const spawnProb = 0.7; // 窗口内每点每帧 spawn 概率（细水长流）
+      const FRAME_CAP = Math.round(40 + density * 50); // 每帧最多约 40~90 粒
+      let spawned = 0;
       for (let i = 0; i < ecount; i++) {
         const T = emitT[i];
-        if (age < T) continue;
-        if (!emitBurst[i]) {
-          // 前沿刚扫到：沿边缘法线爆发一簇火星（粒子密集地贴着锯齿边缘喷出）
-          emitBurst[i] = 1;
-          const bn = Math.max(0, Math.round(burstN * emitW[i])); // 末段前沿爆发数大幅减少
-          for (let k = 0; k < bn; k++) spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
-        } else if (age < T + 150 && Math.random() < 0.28 * emitW[i]) {
-          // 前沿过后短暂尾随少量火花（余烬渐熄）；末段同样抑制
-          spawnEmber(emitX[i], emitY[i], emitNX[i], emitNY[i], emitW[i]);
+        if (age < T + burstAt) continue;   // 沿前沿推进而点燃（根对齐燃烧边）
+        if (age > T + winEnd) continue;    // 火舌飘离后熄灭，不在已烧黑区滞留
+        if (spawned >= FRAME_CAP) break;   // 全帧上限：避免开头爆满
+        if (Math.random() < emitW[i] * spawnProb) {
+          // 根仅极小抖动（火舌细、紧贴燃边、不挤成一簇）
+          const ox = (Math.random() - 0.5) * 6;
+          const oy = (Math.random() - 0.5) * 6;
+          spawnEmber(emitX[i] + ox, emitY[i] + oy, emitNX[i], emitNY[i], emitW[i]);
+          spawned++;
         }
       }
     }
-    ctx.globalCompositeOperation = "lighter";
-    for (let i = 0; i < emberCount; i++) {
-      let a = eage[i] + dt * 1000;
-      eage[i] = a;
-      const life = elife[i];
-      if (a >= life) {
-        // swap-remove
-        const last = --emberCount;
-        if (i !== last) {
-          ex[i] = ex[last]; ey[i] = ey[last]; evx[i] = evx[last]; evy[i] = evy[last];
-          elife[i] = elife[last]; eage[i] = eage[last]; esize[i] = esize[last]; eseed[i] = eseed[last];
+    // ---- 余烬：GPU 点精灵单次 draw call（additive 辉光，替代 2D 逐粒 drawImage）----
+    if (emberCount > 0) {
+      let p = 0;
+      for (let i = 0; i < emberCount; i++) {
+        let a = eage[i] + dt * 1000;
+        eage[i] = a;
+        const life = elife[i];
+        if (a >= life) {
+          // swap-remove
+          const last = --emberCount;
+          if (i !== last) {
+            ex[i] = ex[last]; ey[i] = ey[last]; evx[i] = evx[last]; evy[i] = evy[last];
+            elife[i] = elife[last]; eage[i] = eage[last]; esize[i] = esize[last]; eseed[i] = eseed[last];
+          }
+          i--;
+          continue;
         }
-        i--;
-        continue;
+        const sway = Math.sin(a * 0.006 + eseed[i]) * 10; // 小幅摆动（短命下仅几 px，不横向铺开成团）
+        ex[i] += (evx[i] + sway) * dt;
+        ey[i] += evy[i] * dt;
+        const life01 = a / life;
+        const alpha = Math.min(1, (1 - life01) * (1 - life01 * 0.15) * 1.25); // 中段更亮更持久、末端才淡出
+        if (alpha < 0.02) continue; // 末端极淡：本帧不画（仍留池中）
+        const r = esize[i] * (1 - life01 * 0.4); // 冷却收缩更缓：火挂更久、离前沿后缩小变暗
+        // 火色（光晕色）：随生命从亮黄橙(热)冷却到暗红(冷)连续插值。
+        // 蓝色通道在整个生命周期压到 ~0：加性叠加时蓝永不饱和，密集前沿只会叠到黄/橙，
+        // 而不会像原配色(蓝≈0.2~0.46)那样叠多了蓝也顶满 → 整片泛白。
+        let cr: number, cg: number, cb: number;
+        if (life01 < 0.4) {
+          const t = life01 / 0.4;
+          cr = 1; cg = 0.82 + (0.55 - 0.82) * t; cb = 0.08 * (1 - t); // 热：亮黄橙→橙（更黄更浓；仅出生一丝暖蓝）
+        } else if (life01 < 0.75) {
+          const t = (life01 - 0.4) / 0.35;
+          cr = 1; cg = 0.55 + (0.32 - 0.55) * t; cb = 0; // 中：橙（更亮）
+        } else {
+          const t = (life01 - 0.75) / 0.25;
+          cr = 1 + (0.72 - 1) * t; cg = 0.32 + (0.14 - 0.32) * t; cb = 0; // 冷：暗红（略提亮避免太暗淡）
+        }
+        // 白热核心只在该粒子最出生的极短瞬间(life01<0.18)出现，且迅速衰减；
+        // 其余时间 coreW=0 → 粒子完全是橙黄火色，不再整体发白。
+        const coreW = life01 < 0.18 ? Math.pow(1 - life01 / 0.18, 2) : 0;
+        glData[p] = ex[i]; glData[p + 1] = ey[i]; glData[p + 2] = r;
+        glData[p + 3] = alpha; glData[p + 4] = cr; glData[p + 5] = cg; glData[p + 6] = cb;
+        glData[p + 7] = coreW;
+        p += 8;
       }
-      const sway = Math.sin(a * 0.006 + eseed[i]) * 22;
-      ex[i] += (evx[i] + sway) * dt;
-      ey[i] += evy[i] * dt;
-      const life01 = a / life;
-      const alpha = (1 - life01) * (1 - life01 * 0.3); // 末端更快淡出
-      if (alpha < 0.02) continue;
-      ctx.globalAlpha = alpha;
-      // 冷却收缩：出生最大最热，离开前沿后缩小变暗
-      const r = esize[i] * (1 - life01 * 0.55);
-      // 按温度选精灵：热(白) → 中(橙) → 冷(暗红)
-      const sp = life01 < 0.34 ? spriteHot : life01 < 0.7 ? spriteMid : spriteCool;
-      ctx.drawImage(sp, ex[i] - r, ey[i] - r, r * 2, r * 2);
+      if (p > 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, glData.subarray(0, p), gl.DYNAMIC_DRAW);
+        gl.drawArrays(gl.POINTS, 0, p / 8);
+      }
     }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
 
     if (age >= duration) {
       if (isDissolve) {
-        ctx.clearRect(0, 0, w, h);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
         stopLoop();
         try {
           onDone(); // 触发真正隐藏窗口
@@ -602,7 +755,8 @@ function runErode(
         }
       } else {
         window.clearInterval(backupId);
-        ctx.clearRect(0, 0, w, h);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
         finishMaterialize();
         onDone();
       }
@@ -668,6 +822,11 @@ function runErode(
     restoreRoot(root);
     try {
       canvas.remove();
+    } catch {
+      /* ignore */
+    }
+    try {
+      loseCtx?.loseContext(); // 释放 GPU 资源，避免透明窗口下上下文泄漏
     } catch {
       /* ignore */
     }
