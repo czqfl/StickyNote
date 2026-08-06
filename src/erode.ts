@@ -313,10 +313,12 @@ function runErode(
     attribute float a_size;
     attribute float a_alpha;
     attribute vec3 a_color;
+    attribute float a_core;
     uniform vec2 u_resCss;
     uniform float u_dpr;
     varying float v_alpha;
     varying vec3 v_color;
+    varying float v_core;
     void main() {
       vec2 clip = vec2(
         a_pos.x / u_resCss.x * 2.0 - 1.0,
@@ -326,17 +328,22 @@ function runErode(
       gl_PointSize = a_size * 2.0 * u_dpr;
       v_alpha = a_alpha;
       v_color = a_color;
+      v_core = a_core;
     }`;
   const FRAG = `
     precision mediump float;
     varying float v_alpha;
     varying vec3 v_color;
+    varying float v_core;
     void main() {
       vec2 c = gl_PointCoord - vec2(0.5);
       float d = length(c);
       float glow = smoothstep(0.5, 0.0, d); // 中心亮、边缘柔化到 0
+      // 白热核心：越年轻(v_core 越大)中心越白，向外过渡到光晕火色——还原原 2D 精灵的
+      // 径向渐变（白热核 + 橙红晕），否则整粒统一白色、加性叠加会饱和成纯白一片。
+      vec3 col = mix(v_color, vec3(1.0, 0.97, 0.9), v_core * pow(glow, 2.0));
       float a = glow * v_alpha;
-      gl_FragColor = vec4(v_color, a); // 配合 SRC_ALPHA,ONE 实现 additive 辉光
+      gl_FragColor = vec4(col, a); // 配合 SRC_ALPHA,ONE 实现 additive 辉光
     }`;
   const compile = (type: number, src: string): WebGLShader | null => {
     const sh = gl.createShader(type);
@@ -371,13 +378,14 @@ function runErode(
   const a_size = gl.getAttribLocation(program, "a_size");
   const a_alpha = gl.getAttribLocation(program, "a_alpha");
   const a_color = gl.getAttribLocation(program, "a_color");
+  const a_core = gl.getAttribLocation(program, "a_core");
   const u_resCss = gl.getUniformLocation(program, "u_resCss");
   const u_dpr = gl.getUniformLocation(program, "u_dpr");
   gl.uniform2f(u_resCss, w, h);
   gl.uniform1f(u_dpr, dpr);
   const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  const STRIDE = 7 * 4; // 字节
+  const STRIDE = 8 * 4; // 字节：x,y,size,alpha,r,g,b,core
   gl.enableVertexAttribArray(a_pos);
   gl.vertexAttribPointer(a_pos, 2, gl.FLOAT, false, STRIDE, 0);
   gl.enableVertexAttribArray(a_size);
@@ -386,6 +394,8 @@ function runErode(
   gl.vertexAttribPointer(a_alpha, 1, gl.FLOAT, false, STRIDE, 12);
   gl.enableVertexAttribArray(a_color);
   gl.vertexAttribPointer(a_color, 3, gl.FLOAT, false, STRIDE, 16);
+  gl.enableVertexAttribArray(a_core);
+  gl.vertexAttribPointer(a_core, 1, gl.FLOAT, false, STRIDE, 28);
   const loseCtx = gl.getExtension("WEBGL_lose_context");
 
   // 发射点网格：铺满整面，位于锯齿侵蚀前沿上（每个点在其 T 时刻正处前沿）。
@@ -440,8 +450,8 @@ function runErode(
   const esize = new Float32Array(maxEmbers);
   const eseed = new Float32Array(maxEmbers);
   let emberCount = 0;
-  // GPU 上传缓冲：每粒 7 float（x, y, size, alpha, r, g, b），每帧重写后单次 bufferData
-  const glData = new Float32Array(maxEmbers * 7);
+  // GPU 上传缓冲：每粒 8 float（x, y, size, alpha, r, g, b, core），每帧重写后单次 bufferData
+  const glData = new Float32Array(maxEmbers * 8);
 
   // 在前沿点 (x,y) 沿边缘法线 (nmx,nmy) 喷出一粒火星。w 为发射权重（末段小 → 火星更小更弱）。
   // 速度 = 法线喷射(贴合边缘方向) + 上升浮力 + 随机湍流；法线让竖直锯齿段把粒子甩向侧向。
@@ -457,7 +467,7 @@ function runErode(
     evy[i] = nmy * kick * dir - (46 + Math.random() * 96);
     elife[i] = 320 + Math.random() * 560;
     eage[i] = 0;
-    esize[i] = (1.4 + Math.random() * 2.8) * (0.45 + 0.55 * w); // 末段更小
+    esize[i] = (1.9 + Math.random() * 3.1) * (0.45 + 0.55 * w); // 末段更小
     eseed[i] = Math.random() * Math.PI * 2;
   };
 
@@ -676,26 +686,29 @@ function runErode(
         const alpha = (1 - life01) * (1 - life01 * 0.3); // 末端更快淡出
         if (alpha < 0.02) continue; // 末端极淡：本帧不画（仍留池中）
         const r = esize[i] * (1 - life01 * 0.55); // 冷却收缩：出生最大最热，离前沿后缩小变暗
-        // 随生命冷却的火色：热(白) → 中(橙) → 冷(暗红) 连续插值（替代 3 档预渲染精灵）
+        // 火色（光晕色）：随生命从橙(热)冷却到暗红(冷)连续插值；
+        // 真正的白热核心由着色器按 a_core（年轻度高）* 中心凝聚度生成（替代原 2D 精灵的径向渐变）。
         let cr: number, cg: number, cb: number;
-        if (life01 < 0.34) {
-          const t = life01 / 0.34;
-          cr = 1; cg = 0.988 + (0.824 - 0.988) * t; cb = 0.941 + (0.549 - 0.941) * t;
-        } else if (life01 < 0.7) {
-          const t = (life01 - 0.34) / 0.36;
-          cr = 1; cg = 0.824 + (0.588 - 0.824) * t; cb = 0.549 + (0.314 - 0.549) * t;
+        if (life01 < 0.4) {
+          const t = life01 / 0.4;
+          cr = 1; cg = 0.86 + (0.6 - 0.86) * t; cb = 0.46 + (0.2 - 0.46) * t;
+        } else if (life01 < 0.75) {
+          const t = (life01 - 0.4) / 0.35;
+          cr = 1; cg = 0.6 + (0.35 - 0.6) * t; cb = 0.2 + (0.1 - 0.2) * t;
         } else {
-          const t = (life01 - 0.7) / 0.3;
-          cr = 1 + (0.55 - 1) * t; cg = 0.588 + (0.2 - 0.588) * t; cb = 0.314 + (0.08 - 0.314) * t;
+          const t = (life01 - 0.75) / 0.25;
+          cr = 1 + (0.7 - 1) * t; cg = 0.35 + (0.15 - 0.35) * t; cb = 0.1 + (0.04 - 0.1) * t;
         }
+        const coreW = (1 - life01) * (1 - life01); // 越年轻白热核心越亮，老粒无白核
         glData[p] = ex[i]; glData[p + 1] = ey[i]; glData[p + 2] = r;
         glData[p + 3] = alpha; glData[p + 4] = cr; glData[p + 5] = cg; glData[p + 6] = cb;
-        p += 7;
+        glData[p + 7] = coreW;
+        p += 8;
       }
       if (p > 0) {
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, glData.subarray(0, p), gl.DYNAMIC_DRAW);
-        gl.drawArrays(gl.POINTS, 0, p / 7);
+        gl.drawArrays(gl.POINTS, 0, p / 8);
       }
     }
 
