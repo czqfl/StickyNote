@@ -327,6 +327,7 @@ function runFlame(
     uniform float u_time;          // 秒（火焰闪烁/上卷）
     uniform float u_density;       // 0..1 强度（粒子密度设置）
     uniform sampler2D u_mask;      // 消散蒙版：.a = 剩余可见度（1 可见 / 0 已烧没）
+    uniform sampler2D u_flame;     // 火焰高度场：.r = 距燃烧前沿的屏幕归一化高度(0 前沿..~1 活动侧远端)，.g = 是否允许出火
     float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
     float noise(vec2 p){
       vec2 i = floor(p), f = fract(p);
@@ -341,27 +342,35 @@ function runFlame(
     }
     void main() {
       float ny = v_uv.y;                                        // 0 底 .. 1 顶
-      float vis = texture2D(u_mask, vec2(v_uv.x, 1.0 - ny)).a;   // 画布顶=纹理 v=0，需翻转
-      float burned = 1.0 - vis;                                  // 0 完好 .. 1 烧没
-      // 燃烧前沿 ≈ burned 0.5；火焰只在前沿上方（空气侧，dist>0），已烧没侧不出火。
-      float dist = 0.5 - burned;
-      if (dist <= 0.0) { gl_FragColor = vec4(0.0); return; }
-      float shape = exp(-dist * 7.0);                            // 前沿最亮，向上约 0.3 高度快速收住
-      // 上卷噪声火舌：横向起伏 + 随时间向上滚动（仅闪烁/舔动，无离散"力"）。
-      vec2 q = vec2(ny * 5.0 + v_uv.x * 9.0, ny * 9.0 - u_time * 1.4);
-      float n = fbm(q);
-      float tongues = fbm(q * 1.9 + vec2(0.0, u_time * 0.8));
-      float flame = shape * (0.45 + 0.75 * n) * (0.6 + 0.5 * tongues);
-      flame = clamp(flame, 0.0, 1.0);
-      // 竖向分层配色：火舌根（dist≈0）暖白黄 → 中部橙 → 舌尖（dist 大）暗红。降黄（根加白）。
-      vec3 cHot  = vec3(1.0, 0.95, 0.78);   // 根：暖白黄（非纯黄）
-      vec3 cMid  = vec3(1.0, 0.55, 0.16);   // 中：橙
-      vec3 cCool = vec3(0.85, 0.20, 0.06);  // 尖：暗红
-      float h = clamp(dist / 0.28, 0.0, 1.0);                        // 0 根 .. 1 尖
-      vec3 col = h < 0.5 ? mix(cHot, cMid, h / 0.5) : mix(cMid, cCool, (h - 0.5) / 0.5);
-      // 半透明：整体 alpha 偏低、舌尖更透；强度随 density 微调。
-      float alpha = flame * (1.0 - h * 0.5) * (0.45 + 0.28 * u_density);
-      gl_FragColor = vec4(col, alpha);      // 普通 alpha 混合（上下文 premultipliedAlpha:false）
+      float vis  = texture2D(u_mask,  vec2(v_uv.x, 1.0 - ny)).a;   // 画布顶=纹理 v=0，需翻转
+      float hgt  = texture2D(u_flame, vec2(v_uv.x, 1.0 - ny)).r;   // 距前沿高度（0 前沿 .. ~1 活动侧远端）
+      float gate = texture2D(u_flame, vec2(v_uv.x, 1.0 - ny)).g;   // 本列存在真实前沿且位于活动侧 → 允许出火
+      if (gate < 0.5) { gl_FragColor = vec4(0.0); return; }
+      // 火舌高度包络：以前沿（hgt=0）为根，向活动侧（hgt 增大）高斯衰减 → 形成有真实高度的连续火舌（可达约 0.3 屏高）。
+      float envH = exp(-(hgt * hgt) / (2.0 * 0.13 * 0.13));
+      // 上升火舌：分形噪声随时间向上滚动（rise 增大 → 火苗整体上移），横向起伏 → 跳动、参差的火苗。
+      float rise = u_time * 1.9;
+      vec2 q = vec2(v_uv.x * 8.0, hgt * 7.0 - rise);
+      float n  = fbm(q);
+      float n2 = fbm(q * 2.7 + vec2(13.0, -rise * 0.6));
+      float tongues = 0.45 + 0.95 * n;       // 噪声高=火苗旺、低=凹陷
+      float flick   = 0.55 + 0.7 * n2;       // 明灭变化（明暗过渡）
+      float flame = clamp(envH * tongues * flick, 0.0, 1.0);
+      // 竖向分层配色：根（hgt≈0）白热 → 橙 → 红 → 暗红（火尖）；降黄（根加白）。
+      vec3 cCore = vec3(1.00, 0.96, 0.78);   // 根：白热（非纯黄）
+      vec3 cMid  = vec3(1.00, 0.55, 0.16);   // 中：橙
+      vec3 cEdge = vec3(0.86, 0.20, 0.05);   // 红
+      vec3 cTip  = vec3(0.30, 0.05, 0.02);   // 尖：暗红
+      vec3 col;
+      if (hgt < 0.13)          col = mix(cCore, cMid, clamp(hgt / 0.13, 0.0, 1.0));
+      else if (hgt < 0.32)     col = mix(cMid, cEdge, (hgt - 0.13) / 0.19);
+      else                     col = mix(cEdge, cTip, clamp((hgt - 0.32) / 0.5, 0.0, 1.0));
+      // 明灭：核心随噪声提亮（白热闪动），火尖压暗，形成真实明暗过渡。
+      col += cCore * 0.30 * smoothstep(0.65, 1.0, n) * (1.0 - clamp(hgt / 0.4, 0.0, 1.0));
+      // 半透明：根部更实、火尖更透；强度随 density 微调。整体提亮确保火苗清晰可见。
+      float alpha = flame * (1.0 - clamp(hgt / 0.5, 0.0, 1.0) * 0.6) * (0.62 + 0.38 * u_density);
+      alpha = clamp(alpha, 0.0, 0.95);
+      gl_FragColor = vec4(col, alpha);
     }`;
   const compile = (type: number, src: string): WebGLShader | null => {
     const sh = gl.createShader(type);
@@ -419,10 +428,78 @@ function runFlame(
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.uniform1f(u_density, density); // 火焰强度（density 已在 useProgram 后声明）
   gl.uniform1i(u_mask, 0); // 绑定到纹理单元 0
+
+  // 火焰高度场纹理（屏幕归一化“距燃烧前沿的高度”），供着色器把火焰舔出真实高度（而非仅贴着细窄前沿）。
+  const u_flame = gl.getUniformLocation(program, "u_flame");
+  const flameCanvas = document.createElement("canvas");
+  flameCanvas.width = mw;
+  flameCanvas.height = mh;
+  const fctx = flameCanvas.getContext("2d");
+  if (!fctx) {
+    canvas.remove();
+    finishEarly();
+    return () => {};
+  }
+  const flameImg = fctx.createImageData(mw, mh);
+  const flamePx32 = new Uint32Array(flameImg.data.buffer);
+  const flameTex = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, flameTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.uniform1i(u_flame, 1); // 绑定到纹理单元 1
+  gl.activeTexture(gl.TEXTURE0); // 复原默认单元（后续每帧在 TEXTURE0 上传 mask）
+
   const loseCtx = gl.getExtension("WEBGL_lose_context");
 
+  // 计算“距燃烧前沿的高度场”：逐列定位 α 穿越 0.5 的前沿行，再算每像素在活动侧距前沿的归一化高度，
+  // 写入 flameCanvas（R=高度、G=是否允许出火），供着色器把火焰舔出真实高度（而非仅贴着细窄前沿）。
+  // 仅当本列存在“真实前沿”（α 确实穿过 0.5）且像素位于活动侧时出火，避免整张纸一起烧 / 前沿未到就出火。
+  const frontArr = new Float32Array(mw);
+  const computeFlameField = (): void => {
+    const cols = mw, rows = mh;
+    // 顶部 α 判断活动侧：dissolve 顶部=纸(α高)活动侧在上；materialize 顶部=隐(α低)活动侧在下。
+    const topAlpha = ((px32[0] >>> 24) & 0xff) / 255;
+    const activeTop = topAlpha > 0.5;
+    for (let x = 0; x < cols; x++) {
+      let f = -1;
+      let prev = ((px32[x] >>> 24) & 0xff) / 255; // 顶行
+      for (let y = 1; y < rows; y++) {
+        const cur = ((px32[x + y * cols] >>> 24) & 0xff) / 255;
+        if ((prev - 0.5) * (cur - 0.5) <= 0 && prev !== cur) {
+          f = (y - 1) + (0.5 - prev) / (cur - prev); // 线性插值穿越点
+          break;
+        }
+        prev = cur;
+      }
+      frontArr[x] = f;
+    }
+    let p = 0;
+    for (let y = 0; y < rows; y++) {
+      const yN = y / rows;
+      for (let x = 0; x < cols; x++) {
+        const f = frontArr[x];
+        let r = 0, g = 0;
+        if (f >= 0) {
+          const fN = f / rows;
+          // 活动侧（火舌舔入方向）为正：dissolve 活动在上 → (fN - yN)；materialize 活动在下 → (yN - fN)。
+          const dActive = activeTop ? fN - yN : yN - fN;
+          if (dActive > 0) {
+            const hh = dActive > 1 ? 1 : dActive;
+            r = (hh * 255) | 0;
+            g = 255;
+          }
+        }
+        flamePx32[p++] = (255 << 24) | (g << 16) | (g << 8) | r; // R=高度, G=允许出火, B=g, A=255
+      }
+    }
+    fctx.putImageData(flameImg, 0, 0);
+  };
+
   // 注：原「余烬点精灵」覆盖层已移除——火焰改为连续火舌场（见 VERT/FRAG），
-  // 由消散蒙版 + 分形噪声在片元着色器内整体生成，不再有离散颗粒/上升力。
+  // 由消散蒙版 + 分形噪声 + 高度场在片元着色器内整体生成，不再有离散颗粒/上升力。
 
   // ---- 便签本体：进入动画态 ----
   // dissolve：便签本就可见，清掉可能残留的 clip-path、改由 mask 接管；
@@ -600,11 +677,16 @@ function runFlame(
     pushMask(age, false);
     applyOpacity(age);
 
-    // ---- 火焰覆盖层：把当前消散蒙版上传为纹理，再用全屏 quad 着色器烘焙「连续火焰」 ----
+    // ---- 火焰覆盖层：把当前消散蒙版 + 高度场上传为纹理，再用全屏 quad 着色器烘焙「连续火焰」 ----
     // 蒙版已在 pushMask 中按 age 烘焙到 maskCanvas（含燃烧前沿的锯齿/噪声起伏）；
-    // 火焰着色器据此定位前沿、向上舔出分层火舌——无离散颗粒、无上升“力”。
+    // 高度场（computeFlameField）据蒙版定位前沿、算出各像素距前沿高度 → 火焰着色器据此
+    // 把分层火舌舔出真实高度——无离散颗粒、无上升“力”，但具备跳动/上升的真实燃烧感。
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
+    computeFlameField();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, flameTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, flameCanvas);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, maskTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, maskCanvas);
