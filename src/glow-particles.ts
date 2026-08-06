@@ -461,13 +461,13 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：顶部+底部双起点相向推进，中央汇合 ----
-  // 形态（dissolve 语义：T 小 = 先消散）：
-  //  - 顶部起点：ny=0 处 T=0，顶部快速向下推进（topBand 高度内几乎清空）
-  //  - 底部起点：ny=1 处 T=0，底部慢速向上推进（驼峰：中间快、两侧慢）
-  //  - 顶部向两侧蔓延快（左上角/右上角先被吞没）→ 顶部带内 edge 大处 T 更小
-  //  - 顶部到达侧边后沿侧边向下"流淌"（速度介于顶底之间）→ 中央带/底部带边缘走侧边流
-  //  - 中央带 T 最大（最后消散，上下在中央附近汇合）
+  // ---- 消散时间场 T(x,y)：顶部+底部双起点相向推进，在「随 x 起伏的柔和曲线」上汇合 ----
+  // 用户要求：保留双起点、二者合理对接、不要写死一条横线。实现：
+  //  - 每一点取「先到达的前沿」min(顶前沿, 底前沿) 决定消散时刻 → 顶/底自然对接，无分段硬接缝；
+  //  - 汇合高度 convY 随 x 用平滑噪声起伏(±convAmp) → 汇合缝是一条波浪曲线，而非固定横线；
+  //  - 前沿用幂次 frontPow>1：靠近边界更快清空、靠近缝更慢，形成「前沿感」；
+  //  - 两侧(edge)略拖后做驼峰（中间快、边慢），保留破碎边缘的层次。
+  // 形态（dissolve 语义：T 小=先消散）：顶边/底边 T=0 最先清空，向缝收拢、缝最后清。
   const featherMs = 90; // 羽化软边时间带宽（越大边缘越柔）
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
   const mw = Math.max(8, Math.round(w * maskScale));
@@ -489,47 +489,29 @@ function runGlow(
   const noiseScale = 1 / 42; // 主波长 ~42px
 
   // 形态参数
-  const topBand = 0.30;    // 顶部快速带高度比例（0~30% 高度快速清空）
-  const botBand = 0.36;    // 底部慢速带高度比例（底部 36% 高度慢速推进）
-  const topTime = 0.56 * wipe;   // 顶部带清空耗时（明显放缓：616ms，不再抢跑）
-  const botTime = 0.32 * wipe;   // 底部带到中央耗时（明显加快：352ms，驼峰快速拱起）
-  const sideTime = 0.46 * wipe;  // 侧边流淌从顶带到中央带底的耗时（介于顶底之间）
+  const topTime = 0.56 * wipe;   // 顶前沿抵达中部的耗时（偏慢）
+  const botTime = 0.32 * wipe;   // 底前沿抵达中部的耗时（偏快，驼峰快速拱起）
+  const convAmp = 0.16;          // 汇合高度随 x 起伏幅度（高度比例）
+  const convFreq = 0.008;        // 汇合缝波浪频率（越大波浪越密）
+  const frontPow = 1.2;          // 前沿推进幂次（>1：边界快、缝慢，形成前沿感）
 
   // 返回 CSS 坐标 (nx,ny) 的消散时刻
   const dissolveTimeAt = (nx: number, ny: number): number => {
     const ny01 = ny / h; // 0=顶, 1=底
     const nx01 = nx / w;
     const edge = Math.abs(nx01 - 0.5) * 2; // 0=中, 1=边
-
-    let T: number;
-    if (ny01 <= topBand) {
-      // ---- 顶部带：快速清空，两侧（左上角/右上角）更快被吞没 ----
-      T = (ny01 / topBand) * topTime * (1 - 0.22 * edge * edge);
-    } else if (ny01 >= 1 - botBand) {
-      // ---- 底部带：驼峰（中间快、两侧慢）——峰尖陡峭：edge^2 幂次 + 大系数
-      //   中间 1（飞快）、edge=0.5 处 ≈2.0、两侧 5.0（明显拖后），差异拉满
-      const fromBottom = (1 - ny01) / botBand; // 0=底, 1=顶部边界
-      const hump = 1 + 4.0 * edge * edge;
-      const humpT = fromBottom * botTime * hump;
-      // 侧边流延伸：顶部沿侧边向下流淌（介于顶底之间），接管最边缘区域——
-      // 否则底部带边缘会被驼峰拖到极慢，破坏"从顶部顺流而下"的连贯感。
-      const sideExt = topTime + (sideTime - topTime) * (ny01 - topBand) / (1 - topBand);
-      const edgeW = Math.max(0, (edge - 0.6) / 0.4); // 0..1：edge>0.6 后逐渐由侧边流接管
-      T = humpT * (1 - edgeW) + Math.min(humpT, sideExt) * edgeW;
-    } else {
-      // ---- 中央带：上下消散前沿在此汇合 ----
-      // 关键约束：两端必须与邻带严格连续（顶=topTime 接顶部带底、底=botTime 接底部带顶），
-      // 中间用正弦峰——峰值是唯一的汇合点、最后消散，绝无大片平顶/滞留带。
-      // （旧公式在 midProg 0.45~0.55 是 0.90wipe 平顶且底部不衔接 → 中间留一块不消散）
-      const midProg = (ny01 - topBand) / (1 - topBand - botBand); // 0..1
-      const lerpBase = topTime + (botTime - topTime) * midProg; // 0.56→0.32 线性衔接
-      const centerT = lerpBase + 0.30 * wipe * Math.sin(midProg * Math.PI); // 峰值 0.74wipe 在中央
-      // 侧边流：顶部沿侧边向下流淌（介于顶底之间）
-      const sideFlowT = topTime + (sideTime - topTime) * midProg;
-      T = centerT * (1 - edge * edge) + sideFlowT * (edge * edge);
-    }
-
-    // 随机破碎边缘（fbm 噪声 + 细碎抖动）
+    // 该列汇合高度：中央附近随 x 平滑起伏 → 汇合缝是波浪曲线而非固定横线
+    let convY = 0.5 + (valueNoise1(nx * convFreq + 3.1, 7.7) * 2 - 1) * convAmp;
+    if (convY < 0.30) convY = 0.30;
+    else if (convY > 0.70) convY = 0.70;
+    // 各前沿到汇合缝的归一距离（0=边界先清，1=缝最后清）
+    const distTop = ny01 / convY;             // 顶 → 缝
+    const distBot = (1 - ny01) / (1 - convY); // 底 → 缝
+    // 前沿推进：幂次>1 形成前沿感；两侧(edge)略拖后做驼峰（中间快、边慢）
+    const tTop = topTime * Math.pow(distTop < 2 ? distTop : 2, frontPow) * (1 + 0.5 * edge * edge);
+    const tBot = botTime * Math.pow(distBot < 2 ? distBot : 2, frontPow) * (1 + 2.0 * edge * edge);
+    let T = Math.min(tTop, tBot);
+    // 随机破碎边缘（fbm 噪声 + 细碎抖动），让缝附近更碎，避免任何直线感
     const n = fbm(nx * noiseScale, ny * noiseScale) * noiseAmp;
     const j = (hash2(Math.round(nx), Math.round(ny)) * 2 - 1) * jitterAmp;
     let Tf = T + n + j;
