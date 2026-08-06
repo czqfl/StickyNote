@@ -4,25 +4,22 @@
 // 触发：关闭窗口（dissolve）/ 呼出窗口（materialize，互为倒放）。
 // 两个方向**共用同一套粒子系统** → 粒子的形态 / 大小 / 颜色表现完全一致（仅运动方向相反）。
 //
-// 视觉要点（点纸式燃烧 · 方向性速度）：
-// - 方向性燃烧：像点燃一张纸，燃烧速度按方向/位置分层——底部点火向上最快（火焰向上、
-//   优先烧掉上方的纸）、侧边中速（向四周蔓延）、顶部最慢（上面没有纸，只能向下，且前沿
-//   呈「水平缓弧」缓慢下推）。
-// - 底部 ∩ 山峰：底部在中线附近点火，中线向上粒子化最快 → 前沿呈「∩ 山峰」形向上扩张
-//   （中间先空、边界上移）；随高度升高山峰逐渐变平，到顶部变为水平缓弧。
-// - 单条连续前沿：时间场由「高度场扫掠」+「方向性燃烧项」构造（非多源圆涟漪），
-//   前沿始终是单条连续曲线，无圆洞/补丁。
-// - 柔和随机：前沿带克制幅度的弯曲——几个大的缓弯 + 细碎小弯，波动不大
-//   （尤其顶部保持水平、不剧烈起伏，符合物理）。
-// - 粒子一律向上飘：粒子生成后方向**锁死为向上**（pang≈0 ± 发散角），仅保留轻微横向抖动，
-//   不再沿边缘法线四散——所有微粒都朝上方升起、边升边淡出，呈现“被托起升空”的消散感。
-// - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散，不破坏整体上升一致性。
-// - 加速飘散：ease-in-quad 二次缓动，初速 ~200-330px/s → 末速 ~520-780px/s（逐粒子 ±20%），
-//   附加极轻微横向摆动，柔和不"嗖"地飞走。
+// 视觉要点（鸿蒙删除同款 · 多区域错峰消散）：
+// - 多区域错峰消散：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切；随机 2~4 个消散区域
+//   （可贴边、也可在中间），先 1~2 处开始消散，隔一段（~250-500ms）再出现 1~3 处也开始消散；
+//   每个区域以自身为起点向外蔓延（向上略偏置，连带上周边一起逐渐消散），取 min 叠加 →
+//   各区域前沿先后推进、最终全覆盖，总时长 <1s。
+// - 粒子带初速度 + 加速度：生成后方向锁死为向上（pang≈0 ± 发散角），初速慢（~90-190px/s）、
+//   越飘越快（ease-in-quad 加速到 ~620-920px/s），边升边淡出——「被托起升空」的消散感。
+// - 空间立体感（核心）：早发区域的粒子已升空加速，与晚发区域「刚粒子化、尚未上浮」的粒子
+//   在屏幕上重叠（additive 辉光叠加）→ 形成明显的高亮前缘；刚出生的粒子带短促放大高亮。
+// - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散 + 区域随机，
+//   不破坏整体上升一致性。
 // - 颜色（动态主题采样）：构建便签"区域颜色场"（--bg 底色 + has-bg 背景图 cover 为主导，
 //   底色仅轻量调和），按粒子**生成区域**采样对应背景颜色（背景是什么颜色粒子就是什么颜色），
 //   additive 叠加出辉光，边升边变淡直至自然消散。
-// - 形态/大小：鸿蒙式细微光点（亮核 ~0.6-1.5px + 外晕收紧），寿命 900~1500ms 飘散持久。
+// - 形态/大小：鸿蒙式细微光点（亮核 ~0.8-1.2px + 外晕收紧，出生瞬间短促放大成高亮），
+//   寿命 420~740ms（<1s 动画内完成起飘与淡出）。
 //
 // 工程契约（与 flame.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
 // cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出↔关闭"互相打断；
@@ -302,10 +299,10 @@ function runGlow(
   const density = Math.max(0, Math.min(100, particleDensity)) / 100;
 
   // ---- 时序参数（两方向一致，保证粒子表现完全一致）----
-  const wipe = 1100; // 随机时间场 T(x,y) 主体消散/成形时长 ms（顶部+底部双起点相向推进，中央汇合）
-  const endFade = 220; // 末端全局淡出带宽，避免被强制收尾硬切
-  const duration = wipe + 280; // 总时长 ~1380ms（落在 1000-1400ms 区间）
-  const emitWindow = 560; // 每个发射点在前沿扫过后持续涌出粒子的窗口 ms（上飘拖尾，使整片消散区连贯、上下两道在中间衔接）
+  const wipe = 800; // 多区域错峰消散主体时长 ms（总动画 <1s）
+  const endFade = 150; // 末端全局淡出带宽，避免被强制收尾硬切
+  const duration = wipe + 170; // 总时长 ~970ms（<1s）
+  const emitWindow = 420; // 每个发射点在前沿扫过后持续涌出粒子的窗口 ms（上飘拖尾，区域前沿连贯）
 
   // ---- 粒子覆盖层 canvas（WebGL：GPU 单次 draw call 渲染点精灵，替代逐粒 drawImage）----
   const canvas = document.createElement("canvas");
@@ -423,19 +420,15 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：点纸式方向性燃烧（非圆涟漪）----
-  // 底部、顶部、随机一角（左上/右上）三处点火，几乎同时发起，速度/形态按方向分层——
-  //   · 底部点火：向上消散比向两边快 → 前沿呈「高窄尖塔」（Laplace 窄峰）向上冲刺，
-  //     峰随高度缓慢衰减，到顶部附近才变平；
-  //   · 顶部点火：顶边与其余点火同时发起，向下慢推 → 最慢，前沿「水平缓弧」（顶部平面）；
-  //   · 随机一角：左上角或右上角随机一个「小矩形起火区」（从所选侧最上方往下截一段、
-  //     再向里伸一点），该角最先起火、向四周平滑蔓延；
-  //   · 位置随机性：底部扫掠速度、顶部起火时刻/下推速度都随 x 平滑变化（大尺度缓弯）
-  //     → 各列快慢不同，顶部与底部的交汇带参差、不呈水平直线。
-  // 实现：底部扫掠(q^1.8,下快上慢,随 x 微变) + 高窄尖塔，顶部取「顶部平面(随 x 微变)」的 min；
-  //   角矩形加在 min 之后（最先起火）；柔和弯曲加在最后 → 各处接缝连贯、波动一致。
-  // dissolve 语义：T 小=先消散（源点先空）；materialize 用 wipe-T 反向。
-  const featherMs = 90; // 羽化软边时间带宽
+  // ---- 消散时间场 T(x,y)：多区域错峰消散（鸿蒙删除同款观感）----
+  // 随机 2~4 个消散区域（可贴边、也可在中间），分两批错峰发起——
+  //   先 1~2 处开始消散，隔一段（~250-500ms）再出现 1~3 处也开始消散；
+  // 每个区域以自身为起点向外蔓延（向上略偏置 → 连带上周边一起逐渐消散），
+  // 取 min 叠加 → 各区域前沿先后推进、最终全覆盖，总时长 <1s。
+  // 粒子核心：初速度 + 持续加速度（越飘越快）；早发区域粒子已升空、与晚发区域
+  // 刚粒子化未上浮的粒子 additive 叠加 → 前缘高亮、有空间立体感。
+  // dissolve 语义：T 小=先消散（区域先空）；materialize 用 wipe-T 反向。
+  const featherMs = 60; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
   const mw = Math.max(8, Math.round(w * maskScale));
   const mh = Math.max(8, Math.round(h * maskScale));
@@ -450,30 +443,24 @@ function runGlow(
   const mimg = mctx.createImageData(mw, mh);
   const mpx32 = new Uint32Array(mimg.data.buffer); // 32 位写入，仅改最高字节(alpha)
 
-  // 方向性燃烧参数（每次播放重新生成 → 每次观感不同）
-  const leadIn = 40; // 点火前导：极底边不会在 t=0 瞬间全没
-  const sweepSpan = 1600; // 底部扫掠时长基数：配合顶部平面/角矩形，总时长回落到 ~1000ms
-  const peakAmp = 280;    // 底部「高窄尖塔」强度（ms）：中线向上最快、向两边慢
-  const peakHalfW = 0.07; // 尖塔半宽（w 比例，Laplace 尖顶：窄而高 → 向上消散比向两边快）
-  const rectAmp = 240;    // 角落小矩形起火区强度（ms）：随机一个顶角（左上或右上）
-  const rectW = 0.13;     // 角矩形横向宽度（w 比例：从所选侧边向里伸一段）
-  const rectH = 0.17;     // 角矩形纵向长度（h 比例：从所选侧最上方往下截一段）
-  const cornerIsLeft = Math.random() < 0.5; // 左上角或右上角随机选一个
-  const tTop = 60;    // 顶部平面起火时刻（ms）：顶边与底部/角矩形同时发起
-  const dTop = 2800;  // 顶部平面下推时长基数（ms）：大 = 慢（顶部最慢、水平缓弧）
-  const sweepRand = 0.10; // 底部扫掠速度随 x 平滑变化 ±10% → 各列快慢不同（交汇不水平）
-  const topRandT = 80;    // 顶部起火时刻随 x ±80ms → 顶边不同位置不同步起火
-  const topRandD = 0.16;  // 顶部下推速度随 x ±16% → 顶前沿大尺度缓弯
-  const cx = (0.5 + (Math.random() - 0.5) * 0.30) * w; // 底部点火点 x（中线附近随机）
+  // 随机消散区域（每次播放重新生成 → 每次观感不同）：先 1~2 处，隔一段再 1~3 处
+  const regionCount = 2 + Math.floor(Math.random() * 3); // 2~4 个区域
+  const firstBatch = 1 + (Math.random() < 0.5 ? 1 : 0);  // 首批 1~2 个（早发）
+  const diag = Math.hypot(w, h);
+  interface DissolveRegion { x: number; y: number; t0: number; scale: number }
+  const regions: DissolveRegion[] = [];
+  for (let i = 0; i < regionCount; i++) {
+    const early = i < firstBatch;
+    regions.push({
+      x: Math.random() * w, // 任意位置：边上或中间
+      y: Math.random() * h,
+      t0: early ? Math.random() * 90 : 260 + Math.random() * 280, // 错峰发起（第二批 ~260-540ms）
+      scale: 1.7 + Math.random() * 0.7, // 蔓延速度（大=慢）：配合 <1s 总时长
+    });
+  }
   const noisePhase = Math.random() * 100; // 噪声相位随机 → 每次前沿弯曲不同
 
-  // 平滑阶跃：0..e 内从 0 平滑升到 1（角矩形区域形状用）
-  const smoothstep = (e0: number, e1: number, x: number): number => {
-    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
-    return t * t * (3 - 2 * t);
-  };
-
-  // 确定性值噪声：提供「几个大的缓弯 + 细碎小弯」，幅度克制（波动不大，顶部保持水平）。
+  // 确定性值噪声：提供「几个大的缓弯 + 细碎小弯」，幅度克制（波动不大）。
   const hash01 = (n: number): number => {
     const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
     return s - Math.floor(s);
@@ -488,7 +475,7 @@ function runGlow(
     const d = hash01(ix + 1 + (iy + 1) * 57.31);
     return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
   };
-  // 柔和弯曲：低频大缓弯（~2-3 个）＋ 高频小碎弯；底部（∩ 主导）弱化、中上部完整 → 顶部水平波动小。
+  // 柔和弯曲：低频大缓弯（~2-3 个）＋ 高频小碎弯，幅度克制。
   const gentleNoise = (nx: number, ny: number): number => {
     const q = (h - ny) / h;
     const amp = 0.4 + 0.6 * q;
@@ -500,28 +487,19 @@ function runGlow(
     );
   };
 
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻：底部扫掠+高窄尖塔，顶部取平面（min），随机一角小矩形后置
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻：取「最近区域」的错峰扩散时刻（向上略偏置）
   const dissolveTimeAt = (nx: number, ny: number): number => {
-    const q = (h - ny) / h; // 0 底 .. 1 顶
-    // 各列速度随机量（随 x 平滑变化，大尺度缓弯 → 不同位置消散快慢不同，
-    // 顶部与底部的交汇不再是一条水平直线）
-    const sweepVar = valueNoise(nx * 0.006 + noisePhase, 3.31) * 2 - 1;
-    const topVar = valueNoise(nx * 0.006 + noisePhase + 100, 7.71) * 2 - 1;
-    // 底部扫掠：下快上慢（凸曲线），速度随 x ±sweepRand
-    let T = leadIn + sweepSpan * (1 + sweepRand * sweepVar) * Math.pow(q, 1.8);
-    // 底部「高窄尖塔」：中线向上最快、向两边慢（Laplace 窄峰），峰随高度缓慢衰减 → 顶部附近才变平
-    T -= peakAmp * Math.exp(-Math.abs(nx - cx) / (peakHalfW * w)) * Math.pow(1 - q, 0.6);
-    // 顶部平面：起火时刻与下推速度随 x 变化（顶边不同步起火、前沿大尺度缓弯）——
-    // 与底部扫掠取 min，顶部区域由此接管；交汇线随 x 参差、不水平
-    const topPlane = (tTop + topRandT * topVar) + (1 - q) * dTop * (1 + topRandD * topVar);
-    if (topPlane < T) T = topPlane;
-    // 随机一角小矩形起火区（左上或右上）：从所选侧最上方往下截一段、再向里伸一点，
-    // 加在 min 之后 → 该角区域最先起火（与底部/顶部同时发起），向四周平滑蔓延
-    const rectX = cornerIsLeft ? nx : w - nx;
-    const rectShape = (1 - smoothstep(0, rectW * w, rectX)) * (1 - smoothstep(0, rectH * h, ny));
-    T -= rectAmp * rectShape;
-    // 柔和弯曲加在最后 → 顶/底/角各处接缝连贯、波动一致（顶部仍水平、波动小）
-    T += gentleNoise(nx, ny);
+    let best = Infinity;
+    for (let i = 0; i < regions.length; i++) {
+      const r = regions[i];
+      const dx = nx - r.x;
+      const dy = ny - r.y; // 屏幕坐标 y 向下：dy<0 = 在区域上方
+      // 向上略偏置：区域上方的等效距离更短 → 向上/上周边蔓延更快（连带上边一起消散）
+      const eff = Math.hypot(dx, dy) - 0.32 * Math.max(0, -dy);
+      const Tsrc = r.t0 + (eff / diag) * wipe * r.scale;
+      if (Tsrc < best) best = Tsrc;
+    }
+    let T = best + gentleNoise(nx, ny); // 柔和弯曲（克制幅度）
     if (T < 0) T = 0;
     else if (T > wipe - featherMs) T = wipe - featherMs;
     return T;
@@ -547,7 +525,7 @@ function runGlow(
   // peakAlive + 余量；不会像旧版"每格一次性爆发"那样被早发光的边缘格子趁池未满占满，
   // 导致中央（最后才扫到）格子被拒、留下一片无粒子空白。两道扫掠得以在中间用粒子衔接。
   const peakAlive = Math.round(2600 + density * 16000); // 峰值存活粒子数 2600 ~ 18600（随强度；最大配置较旧版提升 3 倍）
-  const avgLife = 1150; // 粒子平均寿命 ms（把峰值存活换算成发射率）
+  const avgLife = 620; // 粒子平均寿命 ms（<1s 动画内完成起飘与淡出；寿命短 → 发射率更高、粒子更密）
   const maxP = peakAlive + 1500; // 余量应对节流帧瞬时多发
   const px = new Float32Array(maxP);
   const py = new Float32Array(maxP);
@@ -582,11 +560,9 @@ function runGlow(
       emitY[ecount] = ny;
       const T = dissolveTimeAt(nx, ny);
       emitT[ecount] = isDissolve ? T : wipe - T; // materialize 反转
-      // 粒子数量随时间递增：前 50% 动画时间消散的粒子少、后 50% 多
-      // （粒子化速度较快 → 主体粒子集中在动画后半段涌出，避免前半段一拥而上）
+      // 粒子数量：早发区域与晚发区域都有稳定粒子量（错峰区域都可见、密度均匀）
       const t01 = Math.max(0, Math.min(1, emitT[ecount] / wipe));
-      let ww = 0.25 + 0.75 * t01; // 线性递增：早期 0.25，末期 1.0
-      ww = ww * ww; // 二次 → 前段抑制更强，后段占比更大
+      const ww = 0.3 + 0.7 * t01; // 早期 0.3、末期 1.0（线性，不做过强抑制）
       emitW[ecount] = ww;
       ecount++;
     }
@@ -684,9 +660,11 @@ function runGlow(
   };
 
   // 在前沿 (x,y) 生成一粒发光微粒；颜色采样自该生成区域的主题色。age 用于把寿命夹到收尾窗口内。
+  // 核心：粒子带「初速度 + 加速度」——初速慢、越飘越快（速度曲线 ease-in-quad 见帧循环），
+  // 早发区域粒子已升空、与晚发区域刚粒子化未上浮的粒子 additive 叠加成高亮前缘。
   const spawn = (x: number, y: number, age: number): void => {
     if (pcount >= maxP) return;
-    let life = 900 + Math.random() * 600; // 900~1500ms：细粒子飘散时间显著延长
+    let life = 420 + Math.random() * 320; // 420~740ms：<1s 动画内完成起飘与淡出
     const fit = duration - age - 60;
     if (fit < 140) return;
     if (life > fit) life = fit;
@@ -694,13 +672,13 @@ function runGlow(
     const sx = x + (Math.random() - 0.5) * (w / ecx);
     px[i] = sx;
     py[i] = y + (Math.random() - 0.5) * 4;
-    pang[i] = (Math.random() - 0.5) * ((70 * Math.PI) / 180); // 一律向上（pang=0 为竖直向上）±35° 发散，不再沿边缘法线
+    pang[i] = (Math.random() - 0.5) * ((70 * Math.PI) / 180); // 一律向上（pang=0 为竖直向上）±35° 发散
     const rv = () => 0.8 + Math.random() * 0.4; // 速度 ±20% 随机差异
-    pv0[i] = (200 + Math.random() * 130) * rv(); // 初速 ~200-330：被风吹起的起始速度
-    pv1[i] = (520 + Math.random() * 260) * rv(); // 末速 ~520-780：顺风加速飘走
+    pv0[i] = (90 + Math.random() * 100) * rv(); // 初速 ~90-190：缓慢起飘（让加速度有发挥空间）
+    pv1[i] = (620 + Math.random() * 300) * rv(); // 末速 ~620-920：越飘越快
     plife[i] = life;
     page[i] = 0;
-    psize[i] = 1.0 * (0.8 + Math.random() * 0.4); // 亮核 ~0.8-1.2px，大小 ±20%
+    psize[i] = 1.0 * (0.8 + Math.random() * 0.4); // 亮核 ~0.8-1.2px，大小 ±20%（深浅远近差异）
     pseed[i] = Math.random() * Math.PI * 2;
     psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移（替代逐帧 sin 摆动）
     const [r, g, b] = sampleThemeColor(sx, y); // 采样生成区域的主题色
@@ -864,9 +842,12 @@ function runGlow(
       px[i] += (dx * speed + psway[i]) * dt; // 恒定向漂移（替代逐帧 sin 摆动，省 CPU）
       py[i] += dy * speed * dt;
       const t = 1 - u;
-      const alpha = t * t * globalFade; // 边升边变淡（平方衰减，替代 Math.pow 更省 CPU）
+      const alpha = t * t * globalFade; // 边升边变淡（平方衰减）：刚粒子化时最亮 → 高亮前缘
       if (alpha < 0.02) continue;
-      const haloR = psize[i] * (1 - u * 0.25) * 1.6; // 亮核 + 外晕（鸿蒙式细光点），略随生命收缩
+      // 刚粒子化（未上浮）的粒子带短促「出生高亮」：更大更亮 → 与已升空粒子 additive
+      // 叠加成明显的高亮区域（空间立体感核心）
+      const birth = u < 0.16 ? 1 - u / 0.16 : 0;
+      const haloR = psize[i] * (1 + birth * 1.1 - u * 0.25) * 1.6; // 亮核 + 外晕，出生瞬间放大
       const o = drawCount * 7;
       glData[o] = px[i] * dpr;          // 设备像素 x
       glData[o + 1] = py[i] * dpr;      // 设备像素 y
