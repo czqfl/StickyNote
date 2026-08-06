@@ -377,12 +377,13 @@ function runGlow(
       float ang = atan(r.y, r.x);
       float wob = 0.10 * sin(ang * 3.0 + v_seed) + 0.06 * sin(ang * 7.0 - v_seed * 1.7); // 不规则轮廓
       float edge = 1.0 + wob;
-      float a0 = 1.0 - smoothstep(edge - 0.5, edge, rr); // 柔和但非圆的边缘
-      if (a0 <= 0.0) discard;
+      float a0 = 1.0 - smoothstep(edge - 0.5, edge, rr); // 柔和但非圆的颗粒主体
       float grain = 0.70 + 0.30 * hash(floor(q * 5.0) + v_seed); // 表面颗粒感（粗噪）
       float core  = 1.0 - smoothstep(0.0, 0.6, rr);              // 中心略亮
-      float bright = grain * (0.82 + 0.18 * core);
-      gl_FragColor = vec4(v_color, v_alpha * a0 * bright);
+      float bright = grain * (0.85 + 0.15 * core);
+      float glow = (1.0 - smoothstep(edge, edge + 0.7, rr)) * 0.32; // 柔和辉光晕：提升可见度，避免"看不清"
+      float a = max(a0 * bright, glow * (1.0 - a0));              // 颗粒主体 + 仅在主体之外的外晕
+      gl_FragColor = vec4(v_color, v_alpha * a);
     }`;
   const compileGL = (type: number, src: string): WebGLShader | null => {
     const sh = gl.createShader(type);
@@ -585,8 +586,7 @@ function runGlow(
       // 粒子数量随时间递增：前 50% 动画时间消散的粒子少、后 50% 多
       // （粒子化速度较快 → 主体粒子集中在动画后半段涌出，避免前半段一拥而上）
       const t01 = Math.max(0, Math.min(1, emitT[ecount] / wipe));
-      let ww = 0.25 + 0.75 * t01; // 线性递增：早期 0.25，末期 1.0
-      ww = ww * ww; // 二次 → 前段抑制更强，后段占比更大
+      let ww = 1.0 - 0.45 * t01; // 轻微递减：早期 1.0、末期 0.55，使整段均匀冒粒、不堆在末段
       emitW[ecount] = ww;
       ecount++;
     }
@@ -701,7 +701,7 @@ function runGlow(
     plife[i] = life;
     page[i] = 0;
     const r1 = Math.random(), r2 = Math.random();
-    psize[i] = 0.8 + r1 * r2 * 3.2; // 沙粒尺寸 0.8~4.0px，偏细小、偶有粗砂
+    psize[i] = 1.6 + r1 * r2 * 4.0; // 沙粒尺寸 1.6~5.6px：提高可见度下限，避免颗粒太细看不清
     pseed[i] = Math.random() * 100.0;  // 形状/噪声种子（错相）
     prot[i] = Math.random() * Math.PI * 2; // 颗粒随机自转朝向
     paniso[i] = Math.random();         // 各向异性：越高被风拉得越长（沙粒条状）
@@ -870,7 +870,7 @@ function runGlow(
       const t = 1 - u;
       const alpha = t * t * globalFade; // 边升边变淡（平方衰减）
       if (alpha < 0.02) continue;
-      const sz = psize[i] * (1 - u * 0.2) * dpr; // 颗粒直径（设备像素），略随生命收缩
+      const sz = psize[i] * (1 - u * 0.2) * dpr * 1.7; // 加大直径以容纳辉光晕，提升可见度
       const o = drawCount * 10;
       glData[o] = px[i] * dpr;          // 设备像素 x
       glData[o + 1] = py[i] * dpr;      // 设备像素 y
