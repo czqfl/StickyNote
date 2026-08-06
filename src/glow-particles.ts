@@ -345,7 +345,7 @@ function runGlow(
   const duration = wipe + 480; // 总时长 ~1580ms（粒子收尾窗口长，细粒子持续飘散）
   const emitWindow = 560; // 每个发射点在前沿扫过后持续涌出粒子的窗口 ms（上飘拖尾，使整片消散区连贯、上下两道在中间衔接）
 
-  // ---- 粒子覆盖层 canvas ----
+  // ---- 粒子覆盖层 canvas（WebGL：GPU 单次 draw call 渲染点精灵，替代逐粒 drawImage）----
   const canvas = document.createElement("canvas");
   canvas.className = "glow-particles-canvas";
   canvas.width = Math.max(1, Math.round(w * dpr));
@@ -359,44 +359,93 @@ function runGlow(
   canvas.style.pointerEvents = "none";
   canvas.style.transform = "translateZ(0)";
   document.body.appendChild(canvas);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
+  const glOpts: WebGLContextAttributes = { alpha: true, premultipliedAlpha: false, antialias: false, depth: false };
+  const gl = (canvas.getContext("webgl", glOpts) ||
+    (canvas.getContext("experimental-webgl" as "webgl", glOpts) as unknown as WebGLRenderingContext | null)) as WebGLRenderingContext | null;
+  if (!gl) {
     canvas.remove();
     finishEarly();
     return () => {};
   }
-  ctx.scale(dpr, dpr);
-
-  // ---- 动态颜色辉光精灵：按采样主题色生成并缓存（量化避免过多）----
-  const SS = 12; // 精灵尺寸收紧（原 24）：粒子实际绘制 ~2-5px，12px 源已足够柔光，绘制光栅化量降到 1/4
-  const spriteList: HTMLCanvasElement[] = [];
-  const spriteKeyToIdx = new Map<string, number>();
-  const spriteIndexFor = (r: number, g: number, b: number): number => {
-    // 量化取 8 级（>>3），保留背景不同区域的色差；16 级会把相近色合并成同一种粒子
-    const key = (r >> 3) + "_" + (g >> 3) + "_" + (b >> 3);
-    const hit = spriteKeyToIdx.get(key);
-    if (hit !== undefined) return hit;
-    const c = document.createElement("canvas");
-    c.width = SS;
-    c.height = SS;
-    const sctx = c.getContext("2d");
-    if (sctx) {
-      // 亮核只轻微提亮（贴近背景本色，不漂白）；外晕用背景原色
-      const cr = Math.round(r + (255 - r) * 0.15);
-      const cg = Math.round(g + (255 - g) * 0.15);
-      const cb = Math.round(b + (255 - b) * 0.15);
-      const grad = sctx.createRadialGradient(SS / 2, SS / 2, 0, SS / 2, SS / 2, SS / 2);
-      grad.addColorStop(0, `rgba(${cr},${cg},${cb},1)`);
-      grad.addColorStop(0.4, `rgba(${r},${g},${b},0.9)`);
-      grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
-      sctx.fillStyle = grad;
-      sctx.fillRect(0, 0, SS, SS);
+  // 顶点：设备像素坐标 → clip 空间；用 gl_PointSize 当点直径；片元用 gl_PointCoord 画软圆辉光
+  const VS_SRC = `
+    attribute vec2 a_pos;     // 设备像素坐标
+    attribute vec2 a_param;   // x=直径(设备px) y=alpha
+    attribute vec3 a_color;   // rgb 0~1
+    uniform vec2 u_res;       // canvas 设备尺寸
+    varying float v_alpha;
+    varying vec3 v_color;
+    void main() {
+      vec2 clip = (a_pos / u_res) * 2.0 - 1.0;
+      clip.y = -clip.y;       // 设备 y 向下，翻转
+      gl_Position = vec4(clip, 0.0, 1.0);
+      gl_PointSize = a_param.x;
+      v_alpha = a_param.y;
+      v_color = a_color;
+    }`;
+  const FS_SRC = `
+    precision mediump float;
+    varying float v_alpha;
+    varying vec3 v_color;
+    void main() {
+      vec2 d = gl_PointCoord - vec2(0.5);
+      float r2 = dot(d, d);
+      if (r2 > 0.25) discard;
+      float a = smoothstep(0.25, 0.0, r2);
+      gl_FragColor = vec4(v_color, v_alpha * a);
+    }`;
+  const compileGL = (type: number, src: string): WebGLShader | null => {
+    const sh = gl.createShader(type);
+    if (!sh) return null;
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.warn("[glow] shader compile failed:", gl.getShaderInfoLog(sh));
+      return null;
     }
-    const idx = spriteList.length;
-    spriteList.push(c);
-    spriteKeyToIdx.set(key, idx);
-    return idx;
+    return sh;
   };
+  const glVS = compileGL(gl.VERTEX_SHADER, VS_SRC);
+  const glFS = compileGL(gl.FRAGMENT_SHADER, FS_SRC);
+  if (!glVS || !glFS) {
+    canvas.remove();
+    finishEarly();
+    return () => {};
+  }
+  const glProg = gl.createProgram();
+  if (!glProg) {
+    canvas.remove();
+    finishEarly();
+    return () => {};
+  }
+  gl.attachShader(glProg, glVS);
+  gl.attachShader(glProg, glFS);
+  gl.linkProgram(glProg);
+  if (!gl.getProgramParameter(glProg, gl.LINK_STATUS)) {
+    console.warn("[glow] program link failed:", gl.getProgramInfoLog(glProg));
+    canvas.remove();
+    finishEarly();
+    return () => {};
+  }
+  gl.useProgram(glProg);
+  const aPosLoc = gl.getAttribLocation(glProg, "a_pos");
+  const aParamLoc = gl.getAttribLocation(glProg, "a_param");
+  const aColorLoc = gl.getAttribLocation(glProg, "a_color");
+  gl.uniform2f(gl.getUniformLocation(glProg, "u_res"), canvas.width, canvas.height);
+  const glBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // additive 辉光（非预乘）
+  let glLost = false;
+  const loseGL = () => {
+    if (glLost) return;
+    glLost = true;
+    const ext = gl.getExtension("WEBGL_lose_context");
+    if (ext) ext.loseContext();
+  };
+
+  // ---- 颜色直接存于粒子（pr/pg/pb，0~1）；WebGL 用程序化点精灵绘制，无需预渲染精灵图 ----
 
   // ---- 颜色场（异步构建；之后按生成区域采样）----
   let field: ColorField | null = null;
@@ -534,7 +583,10 @@ function runGlow(
   const page = new Float32Array(maxP);
   const psize = new Float32Array(maxP);
   const pseed = new Float32Array(maxP);
-  const psprite = new Uint16Array(maxP); // 颜色精灵索引
+  const pr = new Float32Array(maxP); // 粒子颜色 0~1（替代精灵索引，交给 GPU 着色器）
+  const pg = new Float32Array(maxP);
+  const pb = new Float32Array(maxP);
+  const glData = new Float32Array(maxP * 7); // WebGL 上传缓冲：x,y,size,alpha,r,g,b（设备像素坐标）
   const psway = new Float32Array(maxP); // 每粒恒定横向漂移速度 px/s（替代逐帧 Math.sin 摆动，省 CPU）
   let pcount = 0;
 
@@ -677,7 +729,7 @@ function runGlow(
     pseed[i] = Math.random() * Math.PI * 2;
     psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移（替代逐帧 sin 摆动）
     const [r, g, b] = sampleThemeColor(sx, y); // 采样生成区域的主题色
-    psprite[i] = spriteIndexFor(r, g, b);
+    pr[i] = r / 255; pg[i] = g / 255; pb[i] = b / 255; // 主题色直接入粒子，GPU 程序化绘制
   };
 
   // ---- 帧循环控制 ----
@@ -704,6 +756,7 @@ function runGlow(
       window.clearTimeout(watchdog);
       watchdog = 0;
     }
+    loseGL();
   };
 
   function finishEarly(): void {
@@ -801,10 +854,11 @@ function runGlow(
       }
     }
 
-    // ---- 粒子：更新 + 绘制（additive 辉光）----
-    ctx.clearRect(0, 0, w, h);
-    ctx.globalCompositeOperation = "lighter";
+    // ---- 粒子：物理更新（CPU，与之前一致）+ GPU 单次 draw call 绘制（additive 辉光）----
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     const globalFade = age > duration - endFade ? Math.max(0, (duration - age) / endFade) : 1;
+    let drawCount = 0;
     for (let i = 0; i < pcount; i++) {
       const a = page[i] + dt * 1000;
       page[i] = a;
@@ -816,7 +870,7 @@ function runGlow(
           px[i] = px[last]; py[i] = py[last]; pang[i] = pang[last];
           pv0[i] = pv0[last]; pv1[i] = pv1[last]; plife[i] = plife[last];
           page[i] = page[last]; psize[i] = psize[last]; pseed[i] = pseed[last];
-          psprite[i] = psprite[last]; psway[i] = psway[last];
+          pr[i] = pr[last]; pg[i] = pg[last]; pb[i] = pb[last]; psway[i] = psway[last];
         }
         i--;
         continue;
@@ -829,15 +883,32 @@ function runGlow(
       const t = 1 - u;
       const alpha = t * t * globalFade; // 边升边变淡（平方衰减，替代 Math.pow 更省 CPU）
       if (alpha < 0.02) continue;
-      const haloR = psize[i] * (1 - u * 0.25) * 1.6; // 亮核 + 外晕收紧（鸿蒙式细光点），略随生命收缩
-      ctx.globalAlpha = alpha;
-      ctx.drawImage(spriteList[psprite[i]], px[i] - haloR, py[i] - haloR, haloR * 2, haloR * 2);
+      const haloR = psize[i] * (1 - u * 0.25) * 1.6; // 亮核 + 外晕（鸿蒙式细光点），略随生命收缩
+      const o = drawCount * 7;
+      glData[o] = px[i] * dpr;          // 设备像素 x
+      glData[o + 1] = py[i] * dpr;      // 设备像素 y
+      glData[o + 2] = haloR * 2 * dpr;  // 直径（设备像素）作为点大小
+      glData[o + 3] = alpha;
+      glData[o + 4] = pr[i];
+      glData[o + 5] = pg[i];
+      glData[o + 6] = pb[i];
+      drawCount++;
     }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
+    if (drawCount > 0) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, glData.subarray(0, drawCount * 7), gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(aPosLoc);
+      gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 28, 0);
+      gl.enableVertexAttribArray(aParamLoc);
+      gl.vertexAttribPointer(aParamLoc, 2, gl.FLOAT, false, 28, 8);
+      gl.enableVertexAttribArray(aColorLoc);
+      gl.vertexAttribPointer(aColorLoc, 3, gl.FLOAT, false, 28, 16);
+      gl.drawArrays(gl.POINTS, 0, drawCount);
+    }
 
     if (age >= duration) {
-      ctx.clearRect(0, 0, w, h);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
       if (isDissolve) {
         stopLoop();
         try {
