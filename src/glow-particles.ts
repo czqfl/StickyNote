@@ -522,7 +522,7 @@ function runGlow(
   // 采用「连续发射 + 峰值存活上限」模型：全局发射率由峰值存活数换算，池子只需容纳
   // peakAlive + 余量；不会像旧版"每格一次性爆发"那样被早发光的边缘格子趁池未满占满，
   // 导致中央（最后才扫到）格子被拒、留下一片无粒子空白。两道扫掠得以在中间用粒子衔接。
-  const peakAlive = Math.round(2600 + density * 3600); // 峰值存活粒子数 2600 ~ 6200（随强度）
+  const peakAlive = Math.round(2600 + density * 16000); // 峰值存活粒子数 2600 ~ 18600（随强度；最大配置较旧版提升 3 倍）
   const avgLife = 1150; // 粒子平均寿命 ms（把峰值存活换算成发射率）
   const maxP = peakAlive + 1500; // 余量应对节流帧瞬时多发
   const px = new Float32Array(maxP);
@@ -759,7 +759,7 @@ function runGlow(
       spawnAcc += emitRate * dt * 1000; // 该帧应生成的粒子总数（含小数残量累积）
       let n = Math.floor(spawnAcc);
       spawnAcc -= n;
-      if (n > 400) n = 400; // 兜底：节流长帧也不会一次喷爆池子
+      if (n > 600) n = 600; // 兜底：节流长帧也不会一次喷爆池子（密度提升 3 倍后放宽上限）
       for (let k = 0; k < n; k++) {
         // 按 emitW 拒绝采样选一个激活点（权重高的点更常被选中 → 后段/中央更多粒子）
         let idx = activeIdx[(Math.random() * activeCount) | 0];
