@@ -424,14 +424,13 @@ function runGlow(
   };
 
   // ---- 消散时间场 T(x,y)：点纸式方向性燃烧（非圆涟漪）----
-  // 像点燃一张纸，四个方向都要起火，但燃烧速度/形态按方向分层——
-  //   · 底部点火：火焰向上、优先烧掉上方的纸 → 向上粒子化最快，前沿呈「尖峰」（Laplace 尖顶，
-  //     非圆滑拱形）向上扩张；峰随高度衰减，越往上越平；
-  //   · 顶部点火：顶边在 tTop 起火后向下慢推 → 最慢，且前沿呈「水平缓弧」（顶部平面，波动小）；
-  //   · 左上/右上角偏下点火：左右两侧从顶角下方起粒子、中速向四周蔓延（介于底部与顶部之间）；
-  //   · 侧边：左右边缘中速吃入。
-  // 实现：底部扫掠(q^1.8,下快上慢) + 尖峰 + 侧边 + 双角点火，顶部取「顶部平面」的 min——
-  //   单条连续前沿，无圆洞/补丁；柔和弯曲（几个大缓弯 + 细碎小弯，幅度克制）。
+  // 像点燃一张纸，底部、顶部、随机一侧（左右二选一）各起火，速度/形态按方向分层——
+  //   · 底部点火：火焰向上、优先烧掉上方的纸 → 向上粒子化最快，前沿呈「大波峰」（Laplace
+  //     尖顶，尖锐且体量大）向上扩张，峰随高度缓慢衰减、到顶部附近才变平；
+  //   · 顶部点火：顶边在 tTop 起火后向下慢推 → 最慢，前沿「水平缓弧」（顶部平面，波动小）；
+  //   · 随机单侧点火：左右随机选一侧，整条边（一片，非一点）起粒子、中速向中央吃入；
+  // 实现：底部扫掠(q^1.8,下快上慢) + 大波峰 + 单侧条带，顶部取「顶部平面」的 min；
+  //   柔和弯曲加在 min 之后 → 各处接缝连贯、波动一致；单条连续前沿，无圆洞/补丁。
   // dissolve 语义：T 小=先消散（源点先空）；materialize 用 wipe-T 反向。
   const featherMs = 90; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
@@ -450,16 +449,12 @@ function runGlow(
 
   // 方向性燃烧参数（每次播放重新生成 → 每次观感不同）
   const leadIn = 40; // 点火前导：极底边不会在 t=0 瞬间全没
-  const sweepSpan = 1450; // 底部扫掠时长基数：略大于 wipe，配合顶部平面让总时长回落到 ~1000ms
-  const peakAmp = 150;    // 底部「尖峰」强度（ms）：中线点火提前烧，形成尖顶（非圆滑拱形）
-  const peakHalfW = 0.09; // 尖峰半宽（w 比例，Laplace 尖顶：|x-cx| 指数衰减，顶端尖锐）
-  const sideAmp = 130;    // 左右边缘吃入强度（ms）：中速
-  const sideW = 0.13;     // 左右边缘吃入宽度（w 比例）
-  const cornerAmp = 850;  // 左上/右上角偏下点火强度（ms）：让左右两侧从顶角下方开始消散
-  const cornerW = 0.10;   // 角落点火椭圆 x 半径（w 比例）
-  const cornerH = 0.16;   // 角落点火椭圆 y 半径（h 比例）
-  const lx = 0.08 * w, ly = 0.14 * h; // 左上角偏下点火点
-  const rx = 0.92 * w, ry = 0.14 * h; // 右上角偏下点火点
+  const sweepSpan = 1550; // 底部扫掠时长基数：配合顶部平面/单侧起火，总时长回落到 ~1000ms
+  const peakAmp = 260;    // 底部「大波峰」强度（ms）：中线点火大幅提前烧，形成大而尖的波峰
+  const peakHalfW = 0.12; // 波峰半宽（w 比例，Laplace 尖顶：|x-cx| 指数衰减，顶端尖锐、体量大）
+  const sideAmp = 200;    // 随机单侧「整条边」起火强度（ms）：中速向中央吃入
+  const sideW = 0.14;     // 单侧条带吃入宽度（w 比例）
+  const sideIsLeft = Math.random() < 0.5; // 左右两侧随机选一侧发起消散（不是两边都烧）
   const tTop = 300;   // 顶部平面起火时刻（ms）：顶部边缘此时开始向下慢推
   const dTop = 2800;  // 顶部平面下推时长基数（ms）：大 = 慢（顶部最慢、水平缓弧）
   const cx = (0.5 + (Math.random() - 0.5) * 0.30) * w; // 底部点火点 x（中线附近随机）
@@ -492,29 +487,22 @@ function runGlow(
     );
   };
 
-  // 二维高斯（角落点火用）：中心 (px,py)，x/y 半径按 w/h 归一
-  const gauss2 = (nx: number, ny: number, px: number, py: number, sx: number, sy: number): number =>
-    Math.exp(
-      -Math.pow((nx - px) / (sx * w), 2) - Math.pow((ny - py) / (sy * h), 2),
-    );
-
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻：底部扫掠 + 尖峰 + 侧边 + 双角点火，顶部取平面（min）
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻：底部扫掠+大波峰+随机单侧整条边起火，顶部取平面（min）
   const dissolveTimeAt = (nx: number, ny: number): number => {
     const q = (h - ny) / h; // 0 底 .. 1 顶
     // 底部扫掠：下快上慢（凸曲线，q 大=顶部更慢）
     let T = leadIn + sweepSpan * Math.pow(q, 1.8);
-    // 底部「尖峰」：中线点火提前烧，Laplace 尖顶（顶端尖锐、两侧快速收窄），峰随高度衰减 → 顶部变水平
-    T -= peakAmp * Math.exp(-Math.abs(nx - cx) / (peakHalfW * w)) * Math.pow(1 - q, 0.85);
-    // 侧边：左右边缘提前烧（中速吃入，中部最强、两端弱）
-    T -= sideAmp * (Math.exp(-Math.pow(nx / (sideW * w), 2)) + Math.exp(-Math.pow((w - nx) / (sideW * w), 2)))
-       * Math.pow(q, 0.75) * Math.pow(1 - q, 0.5);
-    // 左上/右上角偏下点火：让上方与左右两侧都可见地起粒子（不再只有底部在烧）
-    T -= cornerAmp * (gauss2(nx, ny, lx, ly, cornerW, cornerH) + gauss2(nx, ny, rx, ry, cornerW, cornerH));
-    // 柔和弯曲（幅度克制）
-    T += gentleNoise(nx, ny);
+    // 底部「大波峰」：中线点火大幅提前烧，Laplace 尖顶（顶端尖锐、体量大），
+    // 峰随高度缓慢衰减(0.6) → 爬升全程保持明显，到顶部附近才变平
+    T -= peakAmp * Math.exp(-Math.abs(nx - cx) / (peakHalfW * w)) * Math.pow(1 - q, 0.6);
+    // 随机单侧：整条边（一片）起粒子、中速向中央吃入（不是点；只有随机选中的一侧）
+    const edgeDist = sideIsLeft ? nx : w - nx;
+    T -= sideAmp * Math.exp(-Math.pow(edgeDist / (sideW * w), 2)) * Math.pow(q, 0.7) * Math.pow(1 - q, 0.35);
     // 顶部平面：顶边起火后向下慢推（最慢、水平缓弧）——与底部扫掠取 min，顶部区域由此接管
     const topPlane = tTop + (1 - q) * dTop;
     if (topPlane < T) T = topPlane;
+    // 柔和弯曲加在 min 之后 → 顶/底/侧各处接缝连贯、波动一致（顶部仍水平、波动小）
+    T += gentleNoise(nx, ny);
     if (T < 0) T = 0;
     else if (T > wipe - featherMs) T = wipe - featherMs;
     return T;
