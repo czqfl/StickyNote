@@ -4,7 +4,7 @@ node_modules/
 # ===== Build outputs =====
 dist/
 src-tauri/target/
-src-tauri/target-*/   # 备用/独立 target 目录（如 CARGO_TARGET_DIR=target-check），勿纳入监视/提交
+src-tauri/target-check/   # 备用/独立 target 目录（如 CARGO_TARGET_DIR=target-check），勿纳入监视/提交
 src-tauri/gen/
 
 # ===== Binaries / installers (produced by `npm run pack`) =====
