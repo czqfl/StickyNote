@@ -4,25 +4,24 @@
 // 触发：关闭窗口（dissolve）/ 呼出窗口（materialize，互为倒放）。
 // 两个方向**共用同一套粒子系统** → 粒子的形态 / 大小 / 颜色表现完全一致（仅运动方向相反）。
 //
-// 视觉要点（三方向同时发起 · 中心归聚）：
-// - 每次播放**同时**从三个方向发起消散：底部向上 + 上部向下为必选，左右随机择一侧（向对侧）；
-//   三前沿各自朝画布中心推进，取「最早到达」(min) 为该点消散时刻 → 便签向中心收缩并消失（归聚于中心）。
-// - 前沿形态：
-//   ① 上侧 / 左右选侧：水平山脊状，带轻微起伏、远观如山峰细波（少量峰谷、连续无锯齿）；
-//   ② 底部：方状尖峰——中线附近提前消解，自底部升起一座尖塔（三角硬边=方状）。
-// - 粒子方向由「向上」改为「朝中心汇聚」，三向粒子流最终在中心归聚成一团淡出。
-// - 粒子向中心汇聚：粒子生成后方向**锁死为朝画布中心**（带轻微角散），三向粒子流最终在中心
-//   归聚成一团并淡出；叠加阵风湍流保留风吹沙感，但不再笔直上升。
+// 视觉要点（波峰消散 · 四边汇合）：
+// - 四边随机消散：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切，时间场由「四边随机源点」
+//   涟漪式向外扩散叠加而成——底部 / 顶部 / 左 / 右 各随机布点，每点带随机发起时刻与随机速度，
+//   使每次消散的波前形态都不同；四个方向的消散前沿最终在中央汇合、界面完全消失。
+// - 下方快上方慢：底部源点 scale 小（前沿快）、顶部源点 scale 大（前沿慢），左右中等——
+//   整体呈「下消上慢」的非对称推进，模拟真实物理的下坠消散感。
+// - 底部波峰（∩ 形）：底部仅在中线附近放「快源」，两侧不放快源 → 中线附近先空、边界上移（高），
+//   两侧源点远、最后才空、边界下垂（低），便签底边自然形成「中间高、两边低」的波峰拱形；
+//   边缘为光滑连续曲线（不叠加噪声），无锯齿无断裂。
+// - 粒子一律向上飘：粒子生成后方向**锁死为向上**（pang≈0 ± 发散角），仅保留轻微横向抖动，
+//   不再沿边缘法线四散——所有微粒都朝上方升起、边升边淡出，呈现“被托起升空”的消散感。
 // - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散，不破坏整体上升一致性。
 // - 加速飘散：ease-in-quad 二次缓动，初速 ~200-330px/s → 末速 ~520-780px/s（逐粒子 ±20%），
 //   附加极轻微横向摆动，柔和不"嗖"地飞走。
 // - 颜色（动态主题采样）：构建便签"区域颜色场"（--bg 底色 + has-bg 背景图 cover 为主导，
 //   底色仅轻量调和），按粒子**生成区域**采样对应背景颜色（背景是什么颜色粒子就是什么颜色），
 //   additive 叠加出辉光，边升边变淡直至自然消散。
-// - 形态/大小：不规则沙粒（非完美圆）——每粒随机自转朝向 + 各向异性被风拉长成短条 +
-//   噪声扰动边缘与表面亮度，尺寸 0.8~4px 偏细小偶有粗砂；寿命 900~1500ms 飘散持久。
-// - 阵风湍流：粒子上升中叠加随生命周期起伏的非周期横向/纵向扰动，模拟风把沙粒吹得忽左忽右，
-//   打破"笔直平行上升"的规整感（参考网络常见风吹沙子模拟：高发射率 + 湍流扰动 + 非圆颗粒贴图）。
+// - 形态/大小：鸿蒙式细微光点（亮核 ~0.6-1.5px + 外晕收紧），寿命 900~1500ms 飘散持久。
 //
 // 工程契约（与 erode.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
 // cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出↔关闭"互相打断；
@@ -329,19 +328,14 @@ function runGlow(
     finishEarly();
     return () => {};
   }
-  // 顶点：设备像素坐标 → clip 空间；用 gl_PointSize 当点直径；片元用 gl_PointCoord 画
-  // 不规则沙粒（随机自转 + 各向异性拉伸 + 噪声边缘/亮度），替代完美的软圆辉光。
+  // 顶点：设备像素坐标 → clip 空间；用 gl_PointSize 当点直径；片元用 gl_PointCoord 画软圆辉光
   const VS_SRC = `
     attribute vec2 a_pos;     // 设备像素坐标
     attribute vec2 a_param;   // x=直径(设备px) y=alpha
     attribute vec3 a_color;   // rgb 0~1
-    attribute vec3 a_shape;   // x=自转角 y=各向异性 z=噪声种子
     uniform vec2 u_res;       // canvas 设备尺寸
     varying float v_alpha;
     varying vec3 v_color;
-    varying float v_rot;
-    varying float v_aniso;
-    varying float v_seed;
     void main() {
       vec2 clip = (a_pos / u_res) * 2.0 - 1.0;
       clip.y = -clip.y;       // 设备 y 向下，翻转
@@ -349,39 +343,17 @@ function runGlow(
       gl_PointSize = a_param.x;
       v_alpha = a_param.y;
       v_color = a_color;
-      v_rot = a_shape.x;
-      v_aniso = a_shape.y;
-      v_seed = a_shape.z;
     }`;
   const FS_SRC = `
     precision mediump float;
     varying float v_alpha;
     varying vec3 v_color;
-    varying float v_rot;
-    varying float v_aniso;
-    varying float v_seed;
-    float hash(vec2 p) {
-      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-    }
     void main() {
-      vec2 q = gl_PointCoord - vec2(0.5);
-      q *= 2.0;                                  // [-1,1]
-      float s = sin(v_rot), c = cos(v_rot);
-      vec2 r = vec2(q.x * c - q.y * s, q.x * s + q.y * c); // 旋转到颗粒自身朝向
-      float stretch = mix(1.0, 2.1, v_aniso);    // 沿长轴(x)拉伸
-      float squash  = mix(1.0, 0.5, v_aniso);    // 短轴(y)收窄 → 被风拉成短条
-      r.x /= stretch;
-      r.y /= squash;
-      float rr = length(r);
-      float ang = atan(r.y, r.x);
-      float wob = 0.10 * sin(ang * 3.0 + v_seed) + 0.06 * sin(ang * 7.0 - v_seed * 1.7); // 不规则轮廓
-      float edge = 1.0 + wob;
-      float a0 = 1.0 - smoothstep(edge - 0.5, edge, rr); // 柔和但非圆的边缘
-      if (a0 <= 0.0) discard;
-      float grain = 0.70 + 0.30 * hash(floor(q * 5.0) + v_seed); // 表面颗粒感（粗噪）
-      float core  = 1.0 - smoothstep(0.0, 0.6, rr);              // 中心略亮
-      float bright = grain * (0.82 + 0.18 * core);
-      gl_FragColor = vec4(v_color, v_alpha * a0 * bright);
+      vec2 d = gl_PointCoord - vec2(0.5);
+      float r2 = dot(d, d);
+      if (r2 > 0.25) discard;
+      float a = smoothstep(0.25, 0.0, r2);
+      gl_FragColor = vec4(v_color, v_alpha * a);
     }`;
   const compileGL = (type: number, src: string): WebGLShader | null => {
     const sh = gl.createShader(type);
@@ -420,7 +392,6 @@ function runGlow(
   const aPosLoc = gl.getAttribLocation(glProg, "a_pos");
   const aParamLoc = gl.getAttribLocation(glProg, "a_param");
   const aColorLoc = gl.getAttribLocation(glProg, "a_color");
-  const aShapeLoc = gl.getAttribLocation(glProg, "a_shape");
   gl.uniform2f(gl.getUniformLocation(glProg, "u_res"), canvas.width, canvas.height);
   const glBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
@@ -451,9 +422,15 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：每帧播放随机选取「一个」主方向，前沿为该方向直线推进 +
-  //   垂直向地形起伏，告别四边涟漪/完美圆形；三种方向（见文件头说明）。
-  // dissolve 语义：T 小=先消散；materialize 用 Tm=wipe-T 反向 → 该侧最后成形。
+  // ---- 消散时间场 T(x,y)：四边随机源点「涟漪式」向外扩散，最终中央汇合 ----
+  // 每次播放随机在 底/顶/左/右 各布若干源点：源点位置(x/y)、发起时刻、速度都随机
+  // → 每次消散的波前形态都不同；四方向的消散前沿最终在便签中央汇合、整体消失。
+  // 速度不对称（下快上慢）：底部 scale 小（前沿快）、顶部 scale 大（前沿慢）、左右中等——
+  // 模拟真实物理的下坠消散感。
+  // 底部波峰（∩ 形）：底部只在「中线附近」放快源（≈1 个，x 紧贴中心），两侧不放快源 →
+  // 中线附近先空、边界上移（高），而底部两侧离任何源都远、最后才空、边界下垂（低），
+  // 便签底边自然形成「中间高、两边低」的波峰拱形。
+  // dissolve 语义：T 小=先消散（源点先空）；materialize 用 Tm=wipe-T 反向 → 源点最后成形。
   const featherMs = 90; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
   const mw = Math.max(8, Math.round(w * maskScale));
@@ -469,71 +446,58 @@ function runGlow(
   const mimg = mctx.createImageData(mw, mh);
   const mpx32 = new Uint32Array(mimg.data.buffer); // 32 位写入，仅改最高字节(alpha)
 
-  // ---- 三方向同时发起，最终于中心归聚 ----
-  // 必选：底部向上 + 上部向下；左右随机择一侧（向对侧）。三前沿各自朝中心推进，
-  // 取三者「最早到达」(min) 作为该点消散时刻 → 便签向中心收缩并消失（归聚于中心）。
-  // 形态：
-  //  · 上侧 / 左右选侧：水平山脊状前沿，横向(或纵向)带轻微起伏、远观如山峰细波；
-  //  · 底部：方状尖峰——中线附近提前消解，自底部升起一座尖塔(三角硬边=方状)。
-  const cx = w * 0.5;
-  const cy = h * 0.5;
-  const leftSide = Math.random() < 0.5; // 左右择一侧：true=左→右，false=右→左
+  // 平滑边缘：不叠加任何噪声/抖动，时间场 T 为纯连续函数 → 消散边缘光滑无锯齿。
 
-  // 山峰起伏参数（每次播放随机，峰谷少、平缓、连续无锯齿、不规则）
-  interface CtrlPt { p: number; h: number } // p∈[0,1], h∈[-1,1]
-  const K = 3 + (Math.random() < 0.5 ? 0 : 1);
-  const mtnPts: CtrlPt[] = [];
-  for (let i = 0; i < K; i++) {
-    const p = Math.max(0, Math.min(1, ((i + 0.5) + (Math.random() - 0.5) * 0.6) / K));
-    mtnPts.push({ p, h: Math.random() * 2 - 1 });
+  // 随机源点（每次播放重新生成 → 每次观感不同）
+  const diag = Math.hypot(w, h);
+  interface DissolveSource { x: number; y: number; t0: number; scale: number }
+  const sources: DissolveSource[] = [];
+  // 底部：1 个「中线附近」快源（形成底部波峰的“高”——中线先空、边界上移）；
+  // scale 最小（最快），使底部整体快于顶部。x 紧贴中心 ±一小段，保证“中间高”。
+  sources.push({
+    x: (0.5 + (Math.random() - 0.5) * 0.30) * w, // 中线附近 ±15%
+    y: h - Math.random() * 0.16 * h,               // 底部 0~16% 高度内随机
+    t0: Math.random() * 0.08 * wipe,
+    scale: 0.98,                                  // 底部：最快
+  });
+  // 顶部：1 个随机点，scale 最大（最慢）→ 上方消散慢
+  sources.push({
+    x: (0.12 + Math.random() * 0.76) * w,
+    y: Math.random() * 0.16 * h,
+    t0: Math.random() * 0.06 * wipe,
+    scale: 1.6,                                   // 顶部：最慢（与底部 0.98 形成明显速度差）
+  });
+  // 左侧：1~2 个随机点，中等速度
+  const nLeft = 1 + (Math.random() < 0.5 ? 1 : 0);
+  for (let s = 0; s < nLeft; s++) {
+    sources.push({
+      x: Math.random() * 0.16 * w,
+      y: (0.12 + Math.random() * 0.76) * h,
+      t0: Math.random() * 0.08 * wipe,
+      scale: 1.25,
+    });
   }
-  mtnPts.sort((a, b) => a.p - b.p);
-  const mtnAmp = (0.04 + Math.random() * 0.04) * wipe; // 山峰起伏幅度（轻微）
-  // 底部尖峰：三角(硬边=方状)缺口，中线附近提前消解 → 自底升起的尖塔
-  const spikeAmp = (0.16 + Math.random() * 0.06) * wipe;
-  const spikeHalf = (0.10 + Math.random() * 0.05) * w; // 尖峰半宽
-  const spikeMod = (x: number): number => {
-    const d = Math.abs(x - cx);
-    if (d >= spikeHalf) return 0;
-    return -spikeAmp * (1 - d / spikeHalf); // 三角：中线最深(最负)，边缘为 0
-  };
+  // 右侧：1~2 个随机点，中等速度
+  const nRight = 1 + (Math.random() < 0.5 ? 1 : 0);
+  for (let s = 0; s < nRight; s++) {
+    sources.push({
+      x: w - Math.random() * 0.16 * w,
+      y: (0.12 + Math.random() * 0.76) * h,
+      t0: Math.random() * 0.08 * wipe,
+      scale: 1.25,
+    });
+  }
 
-  // 山峰采样：u∈[0,1] → [-1,1]，段内余弦平滑（C1 连续、无锯齿）
-  const mtnSample = (u: number): number => {
-    if (u <= mtnPts[0].p) return mtnPts[0].h;
-    const last = mtnPts[mtnPts.length - 1];
-    if (u >= last.p) return last.h;
-    for (let i = 0; i < mtnPts.length - 1; i++) {
-      const a = mtnPts[i], b = mtnPts[i + 1];
-      if (u >= a.p && u <= b.p) {
-        const t = (u - a.p) / (b.p - a.p);
-        const s = 0.5 - 0.5 * Math.cos(Math.PI * t); // 余弦平滑，避免锯齿尖角
-        return a.h + (b.h - a.h) * s;
-      }
-    }
-    return last.h;
-  };
-
-  // 各前沿「到达 (nx,ny) 的时刻」（各自朝中心推进，到中心≈wipe）
-  const tTop = (nx: number, ny: number): number => {
-    const base = (ny / (h * 0.5)) * wipe;       // 顶部(y=0)先消，到中心(y=h/2)=wipe
-    const m = mtnAmp * mtnSample(nx / w);        // 横向山脊起伏
-    return base + m;
-  };
-  const tBottom = (nx: number, ny: number): number => {
-    const base = ((h - ny) / (h * 0.5)) * wipe;  // 底部(y=h)先消，到中心=wipe
-    const m = spikeMod(nx);                       // 中线尖峰(负)→提前消解
-    return base + m;
-  };
-  const tSide = (nx: number, ny: number): number => {
-    const base = (leftSide ? nx / (w * 0.5) : (w - nx) / (w * 0.5)) * wipe; // 该侧先消，到中心=wipe
-    const m = mtnAmp * mtnSample(ny / h);         // 纵向山脊起伏（侧边天空线）
-    return base + m;
-  };
-
-  // 取三前沿最早到达 → 便签向中心收缩（三者于中心归聚）
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻：取「最近源点」的扩散时刻
   const dissolveTimeAt = (nx: number, ny: number): number => {
-    let Tf = Math.min(tTop(nx, ny), tBottom(nx, ny), tSide(nx, ny));
+    let best = Infinity;
+    for (let si = 0; si < sources.length; si++) {
+      const sp = sources[si];
+      const d = Math.hypot(nx - sp.x, ny - sp.y) / diag; // 0(源点)..~1(最远)
+      const Tsrc = sp.t0 + Math.pow(d, 0.82) * (wipe * sp.scale);
+      if (Tsrc < best) best = Tsrc;
+    }
+    let Tf = best;
     if (Tf < 0) Tf = 0;
     else if (Tf > wipe - featherMs) Tf = wipe - featherMs;
     return Tf;
@@ -569,13 +533,11 @@ function runGlow(
   const plife = new Float32Array(maxP);
   const page = new Float32Array(maxP);
   const psize = new Float32Array(maxP);
-  const pseed = new Float32Array(maxP); // 噪声种子（错相，避免整片颗粒同形）
-  const prot = new Float32Array(maxP);  // 颗粒自转朝向
-  const paniso = new Float32Array(maxP); // 各向异性（越高越被风拉长）
+  const pseed = new Float32Array(maxP);
   const pr = new Float32Array(maxP); // 粒子颜色 0~1（替代精灵索引，交给 GPU 着色器）
   const pg = new Float32Array(maxP);
   const pb = new Float32Array(maxP);
-  const glData = new Float32Array(maxP * 10); // 上传缓冲：x,y,size,alpha,r,g,b,rot,aniso,seed（设备像素坐标）
+  const glData = new Float32Array(maxP * 7); // WebGL 上传缓冲：x,y,size,alpha,r,g,b（设备像素坐标）
   const psway = new Float32Array(maxP); // 每粒恒定横向漂移速度 px/s（替代逐帧 Math.sin 摆动，省 CPU）
   let pcount = 0;
 
@@ -599,7 +561,8 @@ function runGlow(
       // 粒子数量随时间递增：前 50% 动画时间消散的粒子少、后 50% 多
       // （粒子化速度较快 → 主体粒子集中在动画后半段涌出，避免前半段一拥而上）
       const t01 = Math.max(0, Math.min(1, emitT[ecount] / wipe));
-      let ww = 1.0 - 0.45 * t01; // 起侧(早消)权重高 → 三向粒子流明显朝中心汇聚
+      let ww = 0.25 + 0.75 * t01; // 线性递增：早期 0.25，末期 1.0
+      ww = ww * ww; // 二次 → 前段抑制更强，后段占比更大
       emitW[ecount] = ww;
       ecount++;
     }
@@ -707,20 +670,15 @@ function runGlow(
     const sx = x + (Math.random() - 0.5) * (w / ecx);
     px[i] = sx;
     py[i] = y + (Math.random() - 0.5) * 4;
-    const dxT = cx - sx;            // 朝画布中心汇聚
-    const dyT = cy - py[i];
-    pang[i] = Math.atan2(dxT, -dyT) + (Math.random() - 0.5) * 0.35; // 朝中心 + 轻微角散
+    pang[i] = (Math.random() - 0.5) * ((70 * Math.PI) / 180); // 一律向上（pang=0 为竖直向上）±35° 发散，不再沿边缘法线
     const rv = () => 0.8 + Math.random() * 0.4; // 速度 ±20% 随机差异
     pv0[i] = (200 + Math.random() * 130) * rv(); // 初速 ~200-330：被风吹起的起始速度
     pv1[i] = (520 + Math.random() * 260) * rv(); // 末速 ~520-780：顺风加速飘走
     plife[i] = life;
     page[i] = 0;
-    const r1 = Math.random(), r2 = Math.random();
-    psize[i] = 0.8 + r1 * r2 * 3.2; // 沙粒尺寸 0.8~4.0px，偏细小、偶有粗砂（r1*r2 偏置小值）
-    pseed[i] = Math.random() * 100.0;  // 形状/噪声种子（错相）
-    prot[i] = Math.random() * Math.PI * 2; // 颗粒随机自转朝向
-    paniso[i] = Math.random();         // 各向异性：越高被风拉得越长（沙粒条状）
-    psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移
+    psize[i] = 1.0 * (0.8 + Math.random() * 0.4); // 亮核 ~0.8-1.2px，大小 ±20%
+    pseed[i] = Math.random() * Math.PI * 2;
+    psway[i] = (Math.random() - 0.5) * 28; // ±14 px/s 恒定向漂移（替代逐帧 sin 摆动）
     const [r, g, b] = sampleThemeColor(sx, y); // 采样生成区域的主题色
     pr[i] = r / 255; pg[i] = g / 255; pb[i] = b / 255; // 主题色直接入粒子，GPU 程序化绘制
   };
@@ -871,7 +829,6 @@ function runGlow(
           px[i] = px[last]; py[i] = py[last]; pang[i] = pang[last];
           pv0[i] = pv0[last]; pv1[i] = pv1[last]; plife[i] = plife[last];
           page[i] = page[last]; psize[i] = psize[last]; pseed[i] = pseed[last];
-          prot[i] = prot[last]; paniso[i] = paniso[last];
           pr[i] = pr[last]; pg[i] = pg[last]; pb[i] = pb[last]; psway[i] = psway[last];
         }
         i--;
@@ -880,40 +837,31 @@ function runGlow(
       const speed = pv0[i] + (pv1[i] - pv0[i]) * u * u; // ease-in-quad 柔和加速
       const dx = Math.sin(pang[i]);
       const dy = -Math.cos(pang[i]); // 向上为负 y
-      // 阵风湍流：随生命周期与种子起伏的非周期扰动，模拟风把沙粒吹得忽左忽右（不再笔直平行上升）
-      const ageSec = a * 0.001;
-      const turbX = Math.sin(ageSec * 6.0 + pseed[i]) * 26.0 + Math.sin(ageSec * 2.3 + pseed[i] * 1.9) * 18.0;
-      const turbY = Math.sin(ageSec * 5.1 + pseed[i] * 1.3) * 12.0;
-      px[i] += (dx * speed + psway[i] + turbX) * dt; // 定向漂移 + 阵风横向扰动
-      py[i] += (dy * speed + turbY) * dt;
+      px[i] += (dx * speed + psway[i]) * dt; // 恒定向漂移（替代逐帧 sin 摆动，省 CPU）
+      py[i] += dy * speed * dt;
       const t = 1 - u;
-      const alpha = t * t * globalFade; // 边升边变淡（平方衰减）
+      const alpha = t * t * globalFade; // 边升边变淡（平方衰减，替代 Math.pow 更省 CPU）
       if (alpha < 0.02) continue;
-      const sz = psize[i] * (1 - u * 0.2) * dpr; // 颗粒直径（设备像素），略随生命收缩
-      const o = drawCount * 10;
+      const haloR = psize[i] * (1 - u * 0.25) * 1.6; // 亮核 + 外晕（鸿蒙式细光点），略随生命收缩
+      const o = drawCount * 7;
       glData[o] = px[i] * dpr;          // 设备像素 x
       glData[o + 1] = py[i] * dpr;      // 设备像素 y
-      glData[o + 2] = sz;               // 直径（设备像素）作为点大小
+      glData[o + 2] = haloR * 2 * dpr;  // 直径（设备像素）作为点大小
       glData[o + 3] = alpha;
       glData[o + 4] = pr[i];
       glData[o + 5] = pg[i];
       glData[o + 6] = pb[i];
-      glData[o + 7] = prot[i];          // 自转朝向
-      glData[o + 8] = paniso[i];        // 各向异性
-      glData[o + 9] = pseed[i];         // 噪声种子
       drawCount++;
     }
     if (drawCount > 0) {
       gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, glData.subarray(0, drawCount * 10), gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, glData.subarray(0, drawCount * 7), gl.DYNAMIC_DRAW);
       gl.enableVertexAttribArray(aPosLoc);
-      gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 40, 0);
+      gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 28, 0);
       gl.enableVertexAttribArray(aParamLoc);
-      gl.vertexAttribPointer(aParamLoc, 2, gl.FLOAT, false, 40, 8);
+      gl.vertexAttribPointer(aParamLoc, 2, gl.FLOAT, false, 28, 8);
       gl.enableVertexAttribArray(aColorLoc);
-      gl.vertexAttribPointer(aColorLoc, 3, gl.FLOAT, false, 40, 16);
-      gl.enableVertexAttribArray(aShapeLoc);
-      gl.vertexAttribPointer(aShapeLoc, 3, gl.FLOAT, false, 40, 28);
+      gl.vertexAttribPointer(aColorLoc, 3, gl.FLOAT, false, 28, 16);
       gl.drawArrays(gl.POINTS, 0, drawCount);
     }
 
