@@ -21,7 +21,7 @@ import { NoteData, Settings } from "./types";
 import { renderMarkdown } from "./markdown";
 import { DEFAULT_MD_CSS, DEFAULT_MD_CSS_DARK, getThemeCss, MD_BG_CSS } from "./md-style";
 import { requestFlameDissolveClose, playFlameMaterialize, cancelFlame } from "./flame";
-import { requestGlowDissolveClose, playGlowMaterialize, cancelGlowParticles } from "./glow-particles";
+import { requestGlowDissolveClose, cancelGlowParticles, bumpGlowGen } from "./glow-particles";
 import { requestInhaleDissolveClose, playInhaleMaterialize, cancelInhaleParticles } from "./glow-particles-inhale";
 import { MAX_BLUR_PX, applyGlassBlur, parseColorToRgbInt } from "./glass";
 import { applyPanelBackground } from "./panel-bg";
@@ -821,6 +821,19 @@ export function mountNoteApp(noteId: string, preset = "") {
   // 呼出动画“代次”：呼出是异步启动的（先 getSettings），期间若又触发托盘隐藏/关闭，
   // 递增此计数作废尚未开始的呼出动画，避免在已隐藏窗口上播放/与关闭动画打架。
   let summonSeq = 0;
+  // 「粒子光效」模式无呼出动画：隐藏时窗口保持空画面（clip/mask 全裁），呼出时直接复原显示
+  const restoreGlowSummoned = (): void => {
+    bumpGlowGen(); // 作废上一轮关闭动画遗留的延时清理（否则 400ms 后 cleanupAfterHide 会把刚显示的便签再次裁空）
+    try {
+      noteWindow.style.clipPath = "";
+      noteWindow.style.setProperty("-webkit-mask-image", "");
+      noteWindow.style.setProperty("mask-image", "");
+      noteWindow.style.opacity = "";
+      noteWindow.style.boxShadow = "";
+    } catch {
+      /* ignore */
+    }
+  };
   appWindow.listen("summoned", () => {
     if (collapsed) expandFromEdge(false);
     // 呼出打断进行中的关闭动画：先取消关闭（取消会复原页面、且不会触发 finish/隐藏），
@@ -851,7 +864,8 @@ export function mountNoteApp(noteId: string, preset = "") {
         }
         return;
       }
-      // 非透明主题：按粒子数量/风格设置启动呼出动画（默认粒子消散；火焰模式（设置值 "erode"，历史命名）用火焰消散）
+      // 非透明主题：按粒子数量/风格设置启动呼出动画（火焰模式（设置值 "erode"，历史命名）用火焰消散；
+      // 粒子吸入用吸入动画；默认「粒子光效」无呼出动画——直接复原便签显示）
       const seq = summonSeq; // 快照：等待 getSettings 期间若被隐藏/关闭作废则跳过
       getSettings()
         .then((s) => {
@@ -861,12 +875,12 @@ export function mountNoteApp(noteId: string, preset = "") {
           const intensity = s.particle_count ?? 50;
           if (s.particle_mode === "erode") playFlameMaterialize(noteWindow, intensity);
           else if (s.particle_mode === "inhale") playInhaleMaterialize(noteWindow, intensity);
-          else playGlowMaterialize(noteWindow, intensity);
+          else restoreGlowSummoned();
         })
         .catch(() => {
           if (seq !== summonSeq || closing || deleted) return;
-          // 读取失败回退到粒子光效呼出（火焰已移除）
-          playGlowMaterialize(noteWindow);
+          // 读取失败回退到默认「粒子光效」：直接复原便签显示
+          restoreGlowSummoned();
         });
     }
   });

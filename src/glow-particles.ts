@@ -1,30 +1,27 @@
-// 便签「粒子光效」统一动画：鸿蒙通知删除同款 —— 界面碎裂成大量发光微粒，
-// 区域化朝相近方向加速上升、边升边淡出，全程带光晕辉光。
+// 便签「粒子光效消散」动画（恢复版）：界面从随机几处开始碎裂成发光微粒，
+// 区域化朝相近方向加速上升、边升边淡出，全程带光晕辉光。粒子在便签窗口内渲染。
 // ----------------------------------------------------------------------------
-// 触发：关闭窗口（dissolve）/ 呼出窗口（materialize，互为倒放）。
-// 两个方向**共用同一套粒子系统** → 粒子的形态 / 大小 / 颜色表现完全一致（仅运动方向相反）。
+// 触发：关闭窗口时播放（粒子风格 particle_mode = "particle" 时选用）。
+// 呼出时不播放动画：直接复原便签显示（见 note.ts summoned 处理）。
 //
-// 视觉要点（鸿蒙删除同款 · 多区域错峰消散 · 放慢 10 倍）：
-// - 多区域错峰消散：便签本体用「时间场 T(x,y)」+ mask 逐像素裁切；随机 2~4 个消散区域
-//   （可贴边、也可在中间），先 1~2 处开始消散，隔一段（~2.6-5.4s）再出现 1~3 处也开始消散；
-//   每个区域以自身为起点向外蔓延，且**方向性扩张（非圆形）**：向上快（等效距离 ×0.5）、
-//   向下慢（×1.5）→ 区域向上/上周边蔓延明显快于向下；取 min 叠加 → 各区域前沿先后推进、
-//   最终全覆盖，总时长 ~9.7s（放慢 10 倍，便于观察全过程）。
-// - 粒子「初速度 ≈ 0 + 悬浮期」：刚粒子化先悬浮（悬浮期占寿命 ~15%，区域仍以粒子形态
-//   可见、不立即漂浮），悬浮期后从 0 开始向上加速（ramp² 二次曲线，越飘越快），边升边淡出。
-// - 空间立体感（核心）：早发区域的粒子已升空加速，与晚发区域「刚粒子化、正在悬浮」的粒子
-//   在屏幕上重叠（additive 辉光叠加）→ 形成明显的高亮前缘。
-// - 随机性克制：仅保留粒子大小、速度的 ±20% 微小差异 + 向上方向 ±35° 角发散 + 区域随机，
-//   不破坏整体上升一致性。
+// 视觉要点（对齐需求）：
+// - **上中下三部分限制起爆**：便签竖向三等分——
+//   下 1/3 必须随机某点发起消散（~0ms）；
+//   上 1/3 随机从左侧 / 右侧 / 上侧边缘发起消散（~0ms）；
+//   中 1/3 必发 1 点（动画 ~40% 时起爆）；下/上各 35% 概率补充 1 点（~40% 时）。
+//   每个区域以自身为起点向外蔓延，方向性扩张速度：往上消散 > 左右消散 > 往下消散
+//   （等效距离 上×0.4 / 左右×1.0 / 下×1.8）；幂函数蔓延（先慢后快）；
+//   花瓣状角度调制 → 扩散形状不规则（非圆形）；取 min 叠加 → 各区域前沿先后推进。
+// - 动画后 50%：便签整体透明度 100% → 50% 淡出（不必等 mask 铺满全窗）。
+// - **等加速上升**：所有粒子初速度相同、加速度相同（speed = v0 + a·t），
+//   随机左右偏转 ±55°，可飘向窗口边缘；粒子寿命 1300~1800ms。
 // - 颜色（动态主题采样）：构建便签"区域颜色场"（--bg 底色 + has-bg 背景图 cover 为主导，
 //   底色仅轻量调和），按粒子**生成区域**采样对应背景颜色（背景是什么颜色粒子就是什么颜色），
 //   additive 叠加出辉光，边升边变淡直至自然消散。
-// - 形态/大小：鸿蒙式细密光点（亮核 ~0.4-0.7px + 收紧外晕，出生瞬间轻微放大成前缘高亮），
-//   寿命 4200~7400ms（放慢 10 倍）。
 //
-// 工程契约（与 flame.ts 一致）：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none）；
-// cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出↔关闭"互相打断；
-// 看门狗强制收尾，杜绝动画卡死导致窗口无法关闭/成形。
+// 工程契约：canvas 覆盖层画粒子（z-index 置顶、pointer-events:none、WebGL 单次 draw call
+// 点精灵）；cancelGlowParticles() 立即中止（停帧+复原页面、不触发 onDone），供"呼出打断关闭"；
+// 看门狗强制收尾，杜绝动画卡死导致窗口无法关闭。
 
 let glowActive = false;
 /** 动画代次：每次 runGlow 启动 +1。上一轮动画遗留的延时清理（cleanupAfterHide）凭此作废，
@@ -34,7 +31,7 @@ let glowGen = 0;
 /** 当前粒子动画的“立即中止”句柄（由 runGlow 注册；cancelGlowParticles 调用）。 */
 let cancelGlowFn: (() => void) | null = null;
 
-/** 立即中止粒子动画并复原页面（呼出打断关闭 / 关闭打断呼出时调用——不触发 onDone，窗口保持显示）。 */
+/** 立即中止粒子动画并复原页面（呼出打断关闭时调用——不触发 onDone，窗口保持显示）。 */
 export function cancelGlowParticles(): void {
   const c = cancelGlowFn;
   cancelGlowFn = null;
@@ -63,7 +60,7 @@ function restoreRoot(root: HTMLElement): void {
   }
 }
 
-/** 隐藏便签本体（保持“空画面”，供下次呼出从空开始，契约与 flame.ts 一致）。 */
+/** 隐藏便签本体（保持“空画面”，供下次呼出直接复原显示）。 */
 function blankRoot(root: HTMLElement): void {
   try {
     root.style.clipPath = "inset(0 0 100% 0)";
@@ -76,7 +73,14 @@ function blankRoot(root: HTMLElement): void {
   }
 }
 
-/** 请求播放「粒子光效消散」关闭动画（自底向上）；onDone 在动画完全结束后调用（真正关闭窗口）。 */
+/** 作废上一轮动画遗留的延时清理（cleanupAfterHide）。
+ *  粒子模式无呼出动画，呼出本身不递增 glowGen；若不作废，关闭动画结束后 400ms 的
+ *  cleanupAfterHide 会把「刚呼出并已复原显示」的便签再次裁成空画面（呼出后不显示）。 */
+export function bumpGlowGen(): void {
+  glowGen++;
+}
+
+/** 请求播放「粒子光效消散」关闭动画；onDone 在动画完全结束后调用（真正关闭窗口）。 */
 export function requestGlowDissolveClose(onDone: () => void, particleDensity = 50): void {
   const root = document.querySelector(".note-window") as HTMLElement | null;
   if (!root || glowActive) {
@@ -94,7 +98,7 @@ export function requestGlowDissolveClose(onDone: () => void, particleDensity = 5
     cancelGlowFn = null;
     onDone();
   };
-  const watchdog = window.setTimeout(safeDone, 4000);
+  const watchdog = window.setTimeout(safeDone, 5000);
   cancelGlowFn = () => {
     if (aborted) return;
     aborted = true;
@@ -104,7 +108,7 @@ export function requestGlowDissolveClose(onDone: () => void, particleDensity = 5
     glowActive = false;
   };
   try {
-    stopRun = runGlow(root, "dissolve", particleDensity, () => {
+    stopRun = runGlow(root, particleDensity, () => {
       window.clearTimeout(watchdog);
       safeDone();
     });
@@ -114,34 +118,6 @@ export function requestGlowDissolveClose(onDone: () => void, particleDensity = 5
     safeDone();
   }
 }
-
-/** 播放「粒子光效成形」呼出动画（自顶向下，关闭的倒放）；收尾自动复原页面。 */
-export function playGlowMaterialize(root: HTMLElement, particleDensity = 50): void {
-  // 强制接管：若已有粒子光效动画在播放（快速呼出时上一轮动画未收尾、glowActive 残留），
-  // 先取消旧的再启动新的，杜绝「呼出被静默拒绝 → 窗口空画面永久卡死」。
-  if (glowActive) cancelGlowParticles();
-  glowActive = true;
-  let aborted = false;
-  let stopRun: (() => void) | null = null;
-  cancelGlowFn = () => {
-    if (aborted) return;
-    aborted = true;
-    if (stopRun) stopRun();
-    glowActive = false;
-  };
-  try {
-    stopRun = runGlow(root, "materialize", particleDensity, () => {
-      /* materialize 收尾在 runGlow 内自行复原，无需额外 onDone */
-    });
-  } catch (e) {
-    console.error("粒子光效成形动画异常:", e);
-    cancelGlowFn = null;
-    glowActive = false;
-    restoreRoot(root);
-  }
-}
-
-// ---- 风吹风格：时间场 T 为纯连续函数，不做任何噪声扰动 → 边缘光滑无锯齿 ----
 
 // ---- 颜色工具：采样到的主题色提亮到足够发光的明度（保留色相）----
 function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
@@ -184,12 +160,11 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   ];
 }
 
-/** 让粒子颜色贴近背景实际颜色：只在背景过暗时轻微提亮到最低可见明度（保留色相），
- *  不再强行拉亮成浅色——背景是什么颜色，粒子就是什么颜色。 */
+/** 让粒子颜色贴近背景实际颜色：只在背景过暗时轻微提亮到最低可见明度（保留色相）。 */
 function toGlowColor(r: number, g: number, b: number): [number, number, number] {
   const [h, s, l] = rgbToHsl(r, g, b);
-  const nl = Math.max(l, 0.38); // 仅兜底：深色背景轻微提亮保证 additive 下可见
-  const ns = Math.max(s, 0.2); // 避免发灰
+  const nl = Math.max(l, 0.62); // 兜底提亮：深色主题下粒子也足够明亮（additive 叠加后清晰可见）
+  const ns = Math.max(s, 0.3); // 避免发灰
   return hslToRgb(h, ns, nl);
 }
 
@@ -249,7 +224,7 @@ function buildColorField(root: HTMLElement, w: number, h: number): Promise<Color
       settled = true;
       if (withImage && withImage.naturalWidth > 0) {
         // cover 适配 + 轻量底色调和：以背景图颜色为主导（粒子颜色 = 背景颜色），
-        // 底色仅轻微混合防刺眼——不能用 70% 面板覆盖，否则深色主题会把背景图压没、粒子全同色。
+        // 底色仅轻微混合防刺眼。
         const iw = withImage.naturalWidth;
         const ih = withImage.naturalHeight;
         const ir = iw / ih;
@@ -262,7 +237,7 @@ function buildColorField(root: HTMLElement, w: number, h: number): Promise<Color
         }
         fctx.drawImage(withImage, dx, dy, dw, dh);
         fctx.save();
-        fctx.globalAlpha = panelAlpha * 0.15; // 底色调和仅 ~10%（原 70% 覆盖改为轻混）
+        fctx.globalAlpha = panelAlpha * 0.15;
         fctx.fillStyle = bgColor;
         fctx.fillRect(0, 0, fw, fh);
         fctx.restore();
@@ -285,28 +260,24 @@ function buildColorField(root: HTMLElement, w: number, h: number): Promise<Color
   });
 }
 
-/** 播放一次粒子光效动画。direction: "dissolve"=关闭(自底向上) / "materialize"=呼出(自顶向下)。 */
+/** 播放一次粒子光效消散动画。 */
 function runGlow(
   root: HTMLElement,
-  direction: "dissolve" | "materialize",
   particleDensity: number,
   onDone: () => void,
 ): () => void {
   const myGen = ++glowGen; // 本动画实例代次：作废上一轮遗留的延时清理
-  const isDissolve = direction === "dissolve";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = window.innerWidth;
   const h = window.innerHeight;
   const density = Math.max(0, Math.min(100, particleDensity)) / 100;
 
-  // ---- 时序参数（两方向一致，保证粒子表现完全一致）----
-  const wipe = 8000; // 多区域错峰消散主体时长 ms（放慢 10 倍，便于观察粒子化→悬浮→加速全过程）
-  const endFade = 1500; // 末端全局淡出带宽，避免被强制收尾硬切
-  const duration = wipe + 1700; // 总时长 ~9700ms（原 ~970ms ×10）
-  const emitWindow = 4200; // 每个发射点在前沿扫过后持续涌出粒子的窗口 ms（上飘拖尾，区域前沿连贯）
-  const hoverFrac = 0.15; // 粒子「悬浮期」占寿命比例：刚粒子化先悬浮（区域仍以粒子形态可见），随后向上加速
+  // ---- 时序参数（整体 ~2.4s：主体消散 1400ms + 透明度淡出收尾）
+  const wipe = 1400; // 主体消散窗口 ms
+  const secondBatchAt = 960; // 第二批区域在动画 ~40% 时起爆
+  const duration = 2400; // 总时长 ~2.4s（后半段透明度淡出代替铺满全窗）
 
-  // ---- 粒子覆盖层 canvas（WebGL：GPU 单次 draw call 渲染点精灵，替代逐粒 drawImage）----
+  // ---- 粒子覆盖层 canvas（WebGL：GPU 单次 draw call 渲染点精灵）----
   const canvas = document.createElement("canvas");
   canvas.className = "glow-particles-canvas";
   canvas.width = Math.max(1, Math.round(w * dpr));
@@ -352,8 +323,10 @@ function runGlow(
       vec2 d = gl_PointCoord - vec2(0.5);
       float r2 = dot(d, d);
       if (r2 > 0.25) discard;
-      float a = smoothstep(0.25, 0.0, r2);
-      gl_FragColor = vec4(v_color, v_alpha * a);
+      // 清晰圆形光点：亮核直径 = psize（占点尺寸 60%），边缘羽化 —— 圆点独立可辨
+      float r = sqrt(r2);
+      float a = clamp((0.3 - r) / 0.06, 0.0, 1.0);
+      gl_FragColor = vec4(v_color * 1.5, v_alpha * a);
     }`;
   const compileGL = (type: number, src: string): WebGLShader | null => {
     const sh = gl.createShader(type);
@@ -406,8 +379,6 @@ function runGlow(
     if (ext) ext.loseContext();
   };
 
-  // ---- 颜色直接存于粒子（pr/pg/pb，0~1）；WebGL 用程序化点精灵绘制，无需预渲染精灵图 ----
-
   // ---- 颜色场（异步构建；之后按生成区域采样）----
   let field: ColorField | null = null;
   const sampleThemeColor = (x: number, y: number): [number, number, number] => {
@@ -422,15 +393,15 @@ function runGlow(
     return toGlowColor(field.data[idx], field.data[idx + 1], field.data[idx + 2]);
   };
 
-  // ---- 消散时间场 T(x,y)：多区域错峰消散（鸿蒙删除同款观感）----
-  // 随机 2~4 个消散区域（可贴边、也可在中间），分两批错峰发起——
-  //   先 1~2 处开始消散，隔一段（~2.6-5.4s）再出现 1~3 处也开始消散；
-  // 每个区域以自身为起点向外蔓延，且**方向性扩张（非圆形）**：向上快、向下慢
-  // （等效距离 上×0.5 / 下×1.5）→ 连带上周边一起逐渐消散，总时长 ~9.7s（放慢 10 倍）。
-  // 粒子核心：初速度 ≈ 0 + 悬浮期（区域刚粒子化先悬浮、以粒子形态可见），
-  // 悬浮后从 0 向上加速（越飘越快）；早发粒子与晚发刚粒子化粒子 additive 叠加 → 前缘高亮。
-  // dissolve 语义：T 小=先消散（区域先空）；materialize 用 wipe-T 反向。
-  const featherMs = 600; // 羽化软边时间带宽（放慢 10 倍）
+  // ---- 消散时间场 T(x,y)：上中下三部分限制起爆 ----
+  // 便签竖向三等分：
+  // - 下 1/3：必须随机某点发起消散（~0ms 起爆）
+  // - 中 1/3：必发 1 点（动画 ~40% 时起爆）
+  // - 上 1/3：随机从左侧 / 右侧 / 上侧边缘发起消散（~0ms 起爆）
+  // - 下/上各 35% 概率补充 1 点（~40% 时起爆）→ 每次 3~5 个起爆点
+  // 方向性扩张速度：往上消散 > 左右消散 > 往下消散（等效距离 上×0.4/左右×1.0/下×1.8）
+  // 幂函数蔓延 0.7：前沿先慢后快；花瓣状角度调制 → 扩散形状不规则（非圆形）
+  const featherMs = 70; // 羽化软边时间带宽
   const maskScale = Math.max(0.18, Math.min(0.32, 120 / Math.max(w, 1))); // 目标宽 ~120px
   const mw = Math.max(8, Math.round(w * maskScale));
   const mh = Math.max(8, Math.round(h * maskScale));
@@ -445,24 +416,39 @@ function runGlow(
   const mimg = mctx.createImageData(mw, mh);
   const mpx32 = new Uint32Array(mimg.data.buffer); // 32 位写入，仅改最高字节(alpha)
 
-  // 随机消散区域（每次播放重新生成 → 每次观感不同）：先 1~2 处，隔一段再 1~3 处
-  const regionCount = 2 + Math.floor(Math.random() * 3); // 2~4 个区域
-  const firstBatch = 1 + (Math.random() < 0.5 ? 1 : 0);  // 首批 1~2 个（早发）
+  // 区域生成（每次播放重新生成 → 每次观感不同）
   const diag = Math.hypot(w, h);
   interface DissolveRegion { x: number; y: number; t0: number; scale: number }
   const regions: DissolveRegion[] = [];
-  for (let i = 0; i < regionCount; i++) {
-    const early = i < firstBatch;
-    regions.push({
-      x: Math.random() * w, // 任意位置：边上或中间
-      y: Math.random() * h,
-      t0: early ? Math.random() * 900 : 2600 + Math.random() * 2800, // 错峰发起（放慢 10 倍：首批 ~0-0.9s，第二批 ~2.6-5.4s）
-      scale: 1.7 + Math.random() * 0.7, // 蔓延速度（大=慢）：配合 <1s 总时长
-    });
+  const makeRegion = (x: number, y: number, t0: number): DissolveRegion => ({
+    x,
+    y,
+    t0,
+    scale: 1.1 + Math.random() * 0.25,
+  });
+  // 下 1/3：必须随机某点（首批）
+  regions.push(makeRegion(Math.random() * w, (2 / 3 + Math.random() / 3) * h, Math.random() * 60));
+  // 上 1/3：随机 左 / 右 / 上 侧边缘发起（首批，贴在对应边缘上）
+  const side = Math.random();
+  if (side < 1 / 3) {
+    regions.push(makeRegion(Math.random() * 30, (Math.random() / 3) * h, Math.random() * 60)); // 左侧边
+  } else if (side < 2 / 3) {
+    regions.push(makeRegion(w - Math.random() * 30, (Math.random() / 3) * h, Math.random() * 60)); // 右侧边
+  } else {
+    regions.push(makeRegion(Math.random() * w, Math.random() * 30, Math.random() * 60)); // 上侧边
+  }
+  // 中 1/3：必发 1 点（动画 40% 时起爆）
+  regions.push(makeRegion(Math.random() * w, (1 / 3 + Math.random() / 3) * h, secondBatchAt + Math.random() * 120 - 60));
+  // 补充起爆点（各 35% 概率，动画 40% 时）：下/上部各可能再多 1 点
+  if (Math.random() < 0.35) {
+    regions.push(makeRegion(Math.random() * w, (2 / 3 + Math.random() / 3) * h, secondBatchAt + Math.random() * 120 - 60));
+  }
+  if (Math.random() < 0.35) {
+    regions.push(makeRegion(Math.random() * w, Math.random() * 30, secondBatchAt + Math.random() * 120 - 60));
   }
   const noisePhase = Math.random() * 100; // 噪声相位随机 → 每次前沿弯曲不同
 
-  // 确定性值噪声：提供「几个大的缓弯 + 细碎小弯」，幅度克制（波动不大）。
+  // 确定性值噪声
   const hash01 = (n: number): number => {
     const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
     return s - Math.floor(s);
@@ -477,33 +463,42 @@ function runGlow(
     const d = hash01(ix + 1 + (iy + 1) * 57.31);
     return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
   };
-  // 柔和弯曲：低频大缓弯（~2-3 个）＋ 高频小碎弯，幅度克制。
+  // 柔和弯曲：低频大缓弯 ＋ 高频小碎弯（幅度加大 → 前沿不规则、不圆滑）
   const gentleNoise = (nx: number, ny: number): number => {
     const q = (h - ny) / h;
     const amp = 0.4 + 0.6 * q;
     return amp * (
-      32 * (valueNoise(nx * 0.0055 + noisePhase, ny * 0.004) * 2 - 1) +
-      20 * (valueNoise(nx * 0.012 + 7.3 + noisePhase, ny * 0.009 + 1.7) * 2 - 1) +
-      10 * (valueNoise(nx * 0.05 + 3.1, ny * 0.03 + 4.2) * 2 - 1) +
-       6 * (valueNoise(nx * 0.11 + 9.7, ny * 0.07 + 8.4) * 2 - 1)
+      80 * (valueNoise(nx * 0.004 + noisePhase, ny * 0.003) * 2 - 1) +
+      50 * (valueNoise(nx * 0.009 + 7.3 + noisePhase, ny * 0.007 + 1.7) * 2 - 1) +
+      26 * (valueNoise(nx * 0.035 + 3.1, ny * 0.022 + 4.2) * 2 - 1) +
+      14 * (valueNoise(nx * 0.08 + 9.7, ny * 0.05 + 8.4) * 2 - 1)
     );
   };
 
-  // 返回 CSS 坐标 (nx,ny) 的消散时刻：取「最近区域」的错峰扩散时刻（向上略偏置）
+  // 返回 CSS 坐标 (nx,ny) 的消散时刻
   const dissolveTimeAt = (nx: number, ny: number): number => {
     let best = Infinity;
     for (let i = 0; i < regions.length; i++) {
       const r = regions[i];
       const dx = nx - r.x;
-      const dy = ny - r.y; // 屏幕坐标 y 向下：dy<0 = 在区域上方
-      // 方向性扩张（非圆形）：向上快、向下慢——上方等效距离压缩(×0.5)、下方拉伸(×1.5)
-      const eff = Math.hypot(dx, dy * (dy < 0 ? 0.5 : 1.5));
-      const Tsrc = r.t0 + (eff / diag) * wipe * r.scale;
+      const dy = ny - r.y;
+      // 方向性扩张：上×0.4（最快）、左右×1.0、下×1.8（最慢）
+      let eff = Math.hypot(dx, dy * (dy < 0 ? 0.4 : 1.8));
+      // 花瓣状角度调制 → 扩散形状不规则（非圆形）
+      const theta = Math.atan2(dy, dx);
+      const petal =
+        1 +
+        0.16 * Math.sin(theta * 3 + noisePhase) +
+        0.11 * Math.sin(theta * 5 - noisePhase * 0.7 + 1.9) +
+        0.07 * Math.sin(theta * 7 + noisePhase * 1.3 + 4.1);
+      eff *= Math.max(0.4, petal);
+      // 幂函数 0.7：dT/dr 随距离递减 → 前沿速度随扩散递增，消散先慢后快
+      const Tsrc = r.t0 + Math.pow(eff / diag, 0.7) * wipe * r.scale;
       if (Tsrc < best) best = Tsrc;
     }
-    let T = best + gentleNoise(nx, ny); // 柔和弯曲（克制幅度）
+    let T = best + gentleNoise(nx, ny);
     if (T < 0) T = 0;
-    else if (T > wipe - featherMs) T = wipe - featherMs;
+    else if (T > duration - featherMs) T = duration - featherMs;
     return T;
   };
 
@@ -517,83 +512,7 @@ function runGlow(
     }
   }
 
-  // ---- 粒子漂移方向：一律「向上」飘散 ----
-  // 不再沿边缘法线四散：粒子生成后方向锁死为竖直向上（pang=0），仅保留 ±35° 发散角
-  // 与轻微恒定向漂移（psway），使所有微粒都朝上方升起、边升边淡出——“被托起升空”的消散感。
-  // pang 为「与垂直向上夹角」：0=向上，正值向右；与粒子更新公式 dx=sin(pang)/dy=-cos(pang) 一致。
-
-  // ---- 粒子池（SoA + swap-remove）----
-  // 采用「连续发射 + 峰值存活上限」模型：全局发射率由峰值存活数换算，池子只需容纳
-  // peakAlive + 余量；不会像旧版"每格一次性爆发"那样被早发光的边缘格子趁池未满占满，
-  // 导致中央（最后才扫到）格子被拒、留下一片无粒子空白。两道扫掠得以在中间用粒子衔接。
-  const peakAlive = Math.round(3600 + density * 24000); // 峰值存活粒子数 3600 ~ 27600（更密；最大配置较旧版提升 ~1.5 倍）
-  const avgLife = 6200; // 粒子平均寿命 ms（放慢 10 倍；把峰值存活换算成发射率）
-  const maxP = peakAlive + 1500; // 余量应对节流帧瞬时多发
-  const px = new Float32Array(maxP);
-  const py = new Float32Array(maxP);
-  const pang = new Float32Array(maxP);
-  const pv0 = new Float32Array(maxP);
-  const pv1 = new Float32Array(maxP);
-  const plife = new Float32Array(maxP);
-  const page = new Float32Array(maxP);
-  const psize = new Float32Array(maxP);
-  const pseed = new Float32Array(maxP);
-  const pr = new Float32Array(maxP); // 粒子颜色 0~1（替代精灵索引，交给 GPU 着色器）
-  const pg = new Float32Array(maxP);
-  const pb = new Float32Array(maxP);
-  const glData = new Float32Array(maxP * 7); // WebGL 上传缓冲：x,y,size,alpha,r,g,b（设备像素坐标）
-  const psway = new Float32Array(maxP); // 每粒恒定横向漂移速度 px/s（替代逐帧 Math.sin 摆动，省 CPU）
-  let pcount = 0;
-
-  // ---- 发射点网格：铺满整面（更密），每个点在前沿扫过后持续涌出粒子（见帧循环）----
-  const emitSpacing = 9;
-  const ecx = Math.max(2, Math.ceil(w / emitSpacing));
-  const ecy = Math.max(2, Math.ceil(h / emitSpacing));
-  const emitX = new Float32Array(ecx * ecy);
-  const emitY = new Float32Array(ecx * ecy);
-  const emitT = new Float32Array(ecx * ecy); // 各发射点被前沿扫到的时刻
-  const emitW = new Float32Array(ecx * ecy); // 发射权重：末段前沿大幅降权，避免粒子在终点堆成“墙”
-  let ecount = 0;
-  for (let iy = 0; iy < ecy; iy++) {
-    for (let ix = 0; ix < ecx; ix++) {
-      const nx = (ix + 0.5) * emitSpacing;
-      const ny = (iy + 0.5) * emitSpacing;
-      emitX[ecount] = nx;
-      emitY[ecount] = ny;
-      const T = dissolveTimeAt(nx, ny);
-      emitT[ecount] = isDissolve ? T : wipe - T; // materialize 反转
-      // 粒子数量：早发区域与晚发区域都有稳定粒子量（错峰区域都可见、密度均匀）
-      const t01 = Math.max(0, Math.min(1, emitT[ecount] / wipe));
-      const ww = 0.3 + 0.7 * t01; // 早期 0.3、末期 1.0（线性，不做过强抑制）
-      emitW[ecount] = ww;
-      ecount++;
-    }
-  }
-  // 发射点按“被前沿扫到的时刻 T”分桶（binSize ms），避免每帧扫描全部 ~1.2 万点找激活点：
-  // 每帧只需遍历落在 [age-emitWindow, age] 区间内的少数桶（~28 个）。
-  const binSize = 20;
-  const binCount = Math.ceil((wipe + emitWindow) / binSize) + 1;
-  const binPts: number[][] = [];
-  const binW = new Float32Array(binCount);
-  const binMaxW = new Float32Array(binCount);
-  for (let b = 0; b < binCount; b++) binPts.push([]);
-  for (let i = 0; i < ecount; i++) {
-    let b = Math.floor(emitT[i] / binSize);
-    if (b < 0) b = 0;
-    else if (b >= binCount) b = binCount - 1;
-    binPts[b].push(i);
-    binW[b] += emitW[i];
-    if (emitW[i] > binMaxW[b]) binMaxW[b] = emitW[i];
-  }
-  const abBins = new Int32Array(binCount); // 帧内激活桶集合（预分配，避免每帧 new）
-  const abW = new Float32Array(binCount);
-  // 全局发射率：把峰值存活数换算成「粒子/ms」上限（peakAlive / 平均寿命）；
-  // 每帧按该速率从“激活窗口内”的发射点中加权采样生成，使整段动画匀速涌出、
-  // 顶/底两道前沿同时持续冒粒子并在中央汇合，绝不出现中段空白。
-  const emitRate = peakAlive / avgLife; // 粒子/ms
-
   // ---- mask 裁切：把 T 场逐像素 alpha 渲染到蒙版 canvas，驱动便签平滑消散 ----
-  // （前沿为光滑连续曲线、多起点发起；与 flame.ts 同机制，但无随机破碎）
   const setMask = (url: string): void => {
     root.style.setProperty("-webkit-mask-image", `url("${url}")`);
     root.style.setProperty("mask-image", `url("${url}")`);
@@ -605,22 +524,19 @@ function runGlow(
   const renderMask = (age: number): void => {
     let p = 0;
     for (let i = 0; i < Tfield.length; i++) {
-      let T = Tfield[i];
-      if (!isDissolve) T = wipe - T;
-      const local = age - T;
-      let a = local / featherMs; // -inf..+inf
+      const local = age - Tfield[i];
+      let a = local / featherMs;
       if (a < 0) a = 0;
       else if (a > 1) a = 1;
-      if (isDissolve) a = 1 - a; // dissolve：可见→消散
+      a = 1 - a; // dissolve：可见→消散
       mpx32[p++] = ((a * 255) & 0xff) << 24 | 0x00ffffff; // RGB 白 + alpha
     }
     mctx.putImageData(mimg, 0, 0);
   };
   // 蒙版替换：先解码（new Image onload）再 set，避免逐帧 dataURL 闪烁
   let lastMaskPush = -1;
-  let maskSeq = 0; // 帧序号：仅丢弃"严格更旧"的帧，保证最新帧必然被应用
-  let lastAppliedSeq = 0; // 已应用的最大帧序号
-  let clipCleared = false; // materialize：等首帧 mask 解码生效后再清 clip 全裁（防闪现）
+  let maskSeq = 0;
+  let lastAppliedSeq = 0;
   const pushMask = (age: number, force: boolean): void => {
     if (!force && age - lastMaskPush < 30) return; // ~30Hz 更新蒙版即可（羽化边缘平滑）
     lastMaskPush = age;
@@ -629,67 +545,93 @@ function runGlow(
     const seq = ++maskSeq;
     const im = new Image();
     im.onload = () => {
-      // 只丢弃"比已应用更旧"的帧（防乱序回退）；绝不能用 seq !== maskSeq 丢弃——
-      // 若 Image 解码慢于推帧间隔（30ms），每一帧 onload 触发时 maskSeq 都已递增，
-      // 所有帧都会因"不是最新"被丢，setMask 永不执行：
-      // materialize 的 mask 永远停在初始全透明 → "只有粒子、没有便签"。
       if (endedLocal || seq < lastAppliedSeq) return;
       lastAppliedSeq = seq;
       setMask(url);
-      if (!isDissolve && !clipCleared) {
-        clipCleared = true;
-        try {
-          root.style.clipPath = ""; // mask 已接管显示，解除 materialize 起始的全裁
-        } catch {
-          /* ignore */
-        }
-      }
     };
     im.onerror = () => {
-      if (endedLocal) return;
-      // 解码失败兜底：materialize 解除全裁（mask 用最后成功帧 / 无 mask 则显示本体），
-      // 避免"动画消失、等待看门狗后便签直接弹出"。
-      if (!isDissolve && !clipCleared) {
-        clipCleared = true;
-        try {
-          root.style.clipPath = "";
-        } catch {
-          /* ignore */
-        }
-      }
+      /* 解码失败：保留上一帧 mask，最终由看门狗收尾 */
     };
     im.src = url;
   };
 
-  // 在前沿 (x,y) 生成一粒发光微粒；颜色采样自该生成区域的主题色。age 用于把寿命夹到收尾窗口内。
-  // 核心：粒子「初速度 ≈ 0」——刚粒子化先悬浮（区域仍以粒子形态可见、不立即漂浮），
-  // 随后从 0 开始向上加速（越飘越快）；早发区域粒子与晚发刚粒子化粒子 additive 叠加成高亮。
+  // ---- 发射点网格：铺满整面，每个点在自身 T 时刻恰好生成一粒粒子 ----
+  const emitSpacing = 3;
+  const ecx = Math.max(2, Math.ceil(w / emitSpacing));
+  const ecy = Math.max(2, Math.ceil(h / emitSpacing));
+  const ecount = ecx * ecy;
+  const emitX = new Float32Array(ecount);
+  const emitY = new Float32Array(ecount);
+  const emitT = new Float32Array(ecount);
+  const emitDone = new Uint8Array(ecount);
+  let ei = 0;
+  let maxEmitT = 0;
+  for (let iy = 0; iy < ecy; iy++) {
+    for (let ix = 0; ix < ecx; ix++) {
+      const nx = (ix + 0.5) * emitSpacing;
+      const ny = (iy + 0.5) * emitSpacing;
+      emitX[ei] = nx;
+      emitY[ei] = ny;
+      const T = dissolveTimeAt(nx, ny);
+      emitT[ei] = T;
+      if (T > maxEmitT) maxEmitT = T;
+      ei++;
+    }
+  }
+  // 发射点按 T 分桶（binSize ms）：帧循环只遍历已到时刻的桶
+  const binSize = 20;
+  const binCount = Math.ceil(maxEmitT / binSize) + 2;
+  const binPts: number[][] = [];
+  for (let b = 0; b < binCount; b++) binPts.push([]);
+  for (let i = 0; i < ecount; i++) {
+    let b = Math.floor(emitT[i] / binSize);
+    if (b < 0) b = 0;
+    else if (b >= binCount) b = binCount - 1;
+    binPts[b].push(i);
+  }
+
+  // ---- 粒子池（SoA + swap-remove；初速度/加速度全粒子一致，等加速上升）----
+  const peakAlive = Math.round(6400 + density * 43000);
+  const maxP = Math.max(peakAlive + 1500, ecount + 64);
+  const px = new Float32Array(maxP);
+  const py = new Float32Array(maxP);
+  const pang = new Float32Array(maxP);
+  const pv0 = new Float32Array(maxP);
+  const pv1 = new Float32Array(maxP);
+  const plife = new Float32Array(maxP);
+  const page = new Float32Array(maxP);
+  const psize = new Float32Array(maxP);
+  const pseed = new Float32Array(maxP);
+  const psway = new Float32Array(maxP);
+  const pr = new Float32Array(maxP);
+  const pg = new Float32Array(maxP);
+  const pb = new Float32Array(maxP);
+  const glData = new Float32Array(maxP * 7);
+  let pcount = 0;
+
+  // 在 (x,y) 生成一粒发光微粒；颜色采样自该生成区域的主题色。
   const spawn = (x: number, y: number, age: number): void => {
     if (pcount >= maxP) return;
-    let life = 4200 + Math.random() * 3200; // 4200~7400ms（放慢 10 倍）
-    const fit = duration - age - 600;
-    if (fit < 1400) return;
+    let life = 1300 + Math.random() * 500; // 1300~1800ms
+    const fit = duration - age - 40;
+    if (fit < 120) return;
     if (life > fit) life = fit;
     const i = pcount++;
-    const sx = x + (Math.random() - 0.5) * (w / ecx);
-    px[i] = sx;
-    py[i] = y + (Math.random() - 0.5) * 4;
-    pang[i] = (Math.random() - 0.5) * ((70 * Math.PI) / 180); // 一律向上（pang=0 为竖直向上）±35° 发散
-    const rv = () => 0.8 + Math.random() * 0.4; // 速度 ±20% 随机差异
-    pv0[i] = (6 + Math.random() * 8) * rv(); // 初速 ≈0（悬浮期速度，实际不移动）
-    pv1[i] = (70 + Math.random() * 70) * rv(); // 末速 ~70-140：悬浮后缓慢向上加速
+    px[i] = x;
+    py[i] = y;
+    pang[i] = (Math.random() - 0.5) * ((110 * Math.PI) / 180); // 随机左右偏转 ±55°
+    pv0[i] = 30; // 初速度相同（px/s，缓慢起飘）
+    pv1[i] = 650; // 加速度相同（px/s²，明显加速）
     plife[i] = life;
     page[i] = 0;
-    psize[i] = 0.55 * (0.7 + Math.random() * 0.5); // 亮核 ~0.39-0.66px（细光点：小且密）
+    psize[i] = 1.8; // 亮核 1.8px
     pseed[i] = Math.random() * Math.PI * 2;
-    psway[i] = (Math.random() - 0.5) * 2.8; // ±1.4 px/s 恒定向漂移（放慢 10 倍）
-    const [r, g, b] = sampleThemeColor(sx, y); // 采样生成区域的主题色
-    pr[i] = r / 255; pg[i] = g / 255; pb[i] = b / 255; // 主题色直接入粒子，GPU 程序化绘制
+    psway[i] = (Math.random() - 0.5) * 20; // ±10 px/s 恒定向漂移
+    const [r, g, b] = sampleThemeColor(x, y);
+    pr[i] = r / 255; pg[i] = g / 255; pb[i] = b / 255;
   };
 
   // ---- 帧循环控制 ----
-  // rafId/backupId 是本动画实例的局部句柄（不能是模块级：多个动画实例并存时
-  // 共享句柄会导致 A 的 stopLoop 取消掉 B 的 rAF，帧循环互相踩踏、动画卡死）。
   let rafId = 0;
   let backupId = 0;
   let start = 0;
@@ -698,7 +640,6 @@ function runGlow(
   let lastPaint = 0;
   let endedLocal = false;
   let watchdog = 0;
-  let spawnAcc = 0; // 跨帧累积的“应生成粒子数”小数残量
 
   const stopLoop = () => {
     endedLocal = true;
@@ -716,48 +657,29 @@ function runGlow(
 
   function finishEarly(): void {
     stopLoop();
-    if (isDissolve) {
-      blankRoot(root);
-      onDone();
-    } else {
-      restoreRoot(root);
-      glowActive = false;
-      onDone();
-    }
+    blankRoot(root);
+    onDone();
   }
 
   const cleanupAfterHide = () => {
-    // 代次守卫：若已启动新动画（glowGen 改变），本实例的延时清理作废，
-    // 否则会把正在播放的新动画便签裁掉/隐藏（快速关闭后立刻呼出时会触发）。
-    if (myGen !== glowGen) return;
+    // 本实例资源（rAF/计时器/WebGL context/canvas）必须无条件释放——
+    // 若随代次守卫一起跳过，每次「关闭后 400ms 内呼出」都泄漏一个 WebGL canvas，
+    // 多次后 GPU 内存累积会压垮渲染进程（崩溃页哭脸 + 白屏）。
     stopLoop();
-    blankRoot(root); // 保持“空画面”供下次呼出
     try {
       canvas.remove();
     } catch {
       /* ignore */
     }
+    // 代次守卫（仅保护便签本体样式）：若已启动新动画（glowGen 改变），本实例的
+    // 延时清理作废，不再 blankRoot——否则会把正在播放的新动画便签裁掉/隐藏。
+    if (myGen !== glowGen) return;
+    blankRoot(root); // 保持“空画面”供下次呼出
     glowActive = false;
-  };
-
-  const finishMaterialize = () => {
-    stopLoop();
-    if (myGen !== glowGen) return; // 已被新动画接管：勿复位其样式
-    glowActive = false;
-    // 让“便签已完整显现”的最后一帧先提交，再移除覆盖层与复位样式，避免收尾闪一下。
-    requestAnimationFrame(() => {
-      if (myGen !== glowGen) return; // 期间已启动新动画：勿复位其样式
-      try {
-        canvas.remove();
-      } catch {
-        /* ignore */
-      }
-      restoreRoot(root); // 成形完成：便签完整可见
-    });
   };
 
   const frame = (now: number) => {
-    if (endedLocal) return; // 已取消/收尾：丢弃迟到帧（rAF 回调入队后无法撤销，必须在此拦截）
+    if (endedLocal) return;
     if (!started) {
       started = true;
       start = now;
@@ -767,60 +689,30 @@ function runGlow(
     prevNow = now;
     const age = now - start;
 
-    // ---- 推进平滑消散前沿：渲染 mask + 发射点按各自 T 时刻持续涌出粒子 ----
+    // ---- 推进 mask 消散 + 发射点按各自 T 时刻生成粒子 ----
     pushMask(age, false);
-    // materialize：opacity 随帧淡入（0→1，主体时长内完成）——配合 mask 成形，
-    // 即使 mask 解码慢/失败也不会卡在空白；dissolve 保持不透明（由 mask 控制消散）。
-    if (!isDissolve) {
-      let op = age / wipe;
-      if (op < 0) op = 0;
-      else if (op > 1) op = 1;
-      root.style.opacity = op.toFixed(3);
+    // 动画后 50%：便签整体透明度 100% → 50% 淡出
+    const fadeHalf = duration * 0.5;
+    if (age > fadeHalf) {
+      const p = Math.min(1, (age - fadeHalf) / fadeHalf);
+      root.style.opacity = (1 - 0.5 * p).toFixed(3);
     }
-    // 连续发射：从“激活窗口内的发射点”按 emitW 加权采样生成（全局速率直接落地）。
-    // 先收集落在 [age-emitWindow, age] 的激活桶（~28 个，远少于全部发射点），再从中选点，
-    // 避免每帧扫描 ~1.2 万点；顶/底两道前沿每帧持续冒粒子、向中央连续汇合。
-    let abCount = 0;
-    let abTotalW = 0;
-    const b0 = Math.max(0, Math.floor((age - emitWindow) / binSize));
     const b1 = Math.min(binCount - 1, Math.floor(age / binSize));
-    for (let b = b0; b <= b1; b++) {
-      if (binW[b] > 0) {
-        abBins[abCount] = b;
-        abW[abCount] = binW[b];
-        abTotalW += binW[b];
-        abCount++;
-      }
-    }
-    if (abCount > 0) {
-      spawnAcc += emitRate * dt * 1000; // 该帧应生成的粒子总数（含小数残量累积）
-      let n = Math.floor(spawnAcc);
-      spawnAcc -= n;
-      if (n > 900) n = 900; // 兜底：节流长帧也不会一次喷爆池子（密度提升后放宽上限）
-      for (let k = 0; k < n; k++) {
-        // 按桶权重选一个激活桶
-        let r = Math.random() * abTotalW;
-        let bb = abBins[abCount - 1];
-        for (let z = 0; z < abCount; z++) {
-          r -= abW[z];
-          if (r <= 0) { bb = abBins[z]; break; }
+    for (let b = 0; b <= b1; b++) {
+      const pts = binPts[b];
+      for (let z = 0; z < pts.length; z++) {
+        const idx = pts[z];
+        if (emitDone[idx] === 0) {
+          emitDone[idx] = 1;
+          spawn(emitX[idx], emitY[idx], age);
         }
-        const pts = binPts[bb];
-        // 桶内按 emitW 拒绝采样选一个发射点（权重高的更常被选中 → 后段/中央更多粒子）
-        let idx = pts[(Math.random() * pts.length) | 0];
-        const mw = binMaxW[bb];
-        for (let tr = 0; tr < 4; tr++) {
-          const cand = pts[(Math.random() * pts.length) | 0];
-          if (Math.random() * mw <= emitW[cand]) { idx = cand; break; }
-        }
-        spawn(emitX[idx], emitY[idx], age);
       }
     }
 
-    // ---- 粒子：物理更新（CPU，与之前一致）+ GPU 单次 draw call 绘制（additive 辉光）----
+    // ---- 粒子：物理更新 + GPU 单次 draw call 绘制（additive 辉光）----
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    const globalFade = age > duration - endFade ? Math.max(0, (duration - age) / endFade) : 1;
+    const globalFade = age > duration - 200 ? Math.max(0, (duration - age) / 200) : 1;
     let drawCount = 0;
     for (let i = 0; i < pcount; i++) {
       const a = page[i] + dt * 1000;
@@ -833,30 +725,25 @@ function runGlow(
           px[i] = px[last]; py[i] = py[last]; pang[i] = pang[last];
           pv0[i] = pv0[last]; pv1[i] = pv1[last]; plife[i] = plife[last];
           page[i] = page[last]; psize[i] = psize[last]; pseed[i] = pseed[last];
-          pr[i] = pr[last]; pg[i] = pg[last]; pb[i] = pb[last]; psway[i] = psway[last];
+          psway[i] = psway[last]; pr[i] = pr[last]; pg[i] = pg[last]; pb[i] = pb[last];
         }
         i--;
         continue;
       }
-      // 初速度 ≈ 0：刚粒子化先「悬浮」（区域仍以粒子形态可见、不立即漂浮），
-      // 悬浮期后从 0 开始向上加速（ramp² 二次曲线 → 越飘越快）
-      const ramp = u < hoverFrac ? 0 : (u - hoverFrac) / (1 - hoverFrac);
-      const speed = pv1[i] * ramp * ramp;
+      // 等加速上升：speed = v0 + a·t（初速度/加速度全部粒子一致）
+      const speed = pv0[i] + pv1[i] * (a / 1000);
       const dx = Math.sin(pang[i]);
       const dy = -Math.cos(pang[i]); // 向上为负 y
-      px[i] += (dx * speed + psway[i]) * dt; // 恒定向漂移（替代逐帧 sin 摆动，省 CPU）
+      px[i] += (dx * speed + psway[i]) * dt;
       py[i] += dy * speed * dt;
       const t = 1 - u;
-      const alpha = t * Math.sqrt(t) * globalFade; // 边升边变淡（1.5 次：比平方衰减慢 → 粒子更持久、观感更密）
+      const alpha = t * Math.pow(t, 0.2) * globalFade;
       if (alpha < 0.02) continue;
-      // 刚粒子化（未上浮）的粒子带短促「出生高亮」：略微放大 → 与已升空粒子 additive
-      // 叠加成高亮前缘（空间立体感核心）
-      const birth = u < 0.14 ? 1 - u / 0.14 : 0;
-      const haloR = psize[i] * (1 + birth * 0.7 - u * 0.2) * 1.25; // 亮核 + 收紧外晕，出生瞬间轻微放大
+      const haloR = psize[i] * 1.25;
       const o = drawCount * 7;
-      glData[o] = px[i] * dpr;          // 设备像素 x
-      glData[o + 1] = py[i] * dpr;      // 设备像素 y
-      glData[o + 2] = haloR * 2 * dpr;  // 直径（设备像素）作为点大小
+      glData[o] = px[i] * dpr;
+      glData[o + 1] = py[i] * dpr;
+      glData[o + 2] = haloR * 2 * dpr;
       glData[o + 3] = alpha;
       glData[o + 4] = pr[i];
       glData[o + 5] = pg[i];
@@ -878,16 +765,11 @@ function runGlow(
     if (age >= duration) {
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
-      if (isDissolve) {
-        stopLoop();
-        try {
-          onDone(); // 触发真正隐藏窗口
-        } finally {
-          window.setTimeout(cleanupAfterHide, 400);
-        }
-      } else {
-        finishMaterialize();
-        onDone();
+      stopLoop();
+      try {
+        onDone(); // 触发真正隐藏窗口
+      } finally {
+        window.setTimeout(cleanupAfterHide, 400);
       }
     }
   };
@@ -900,15 +782,12 @@ function runGlow(
 
   const beginLoop = (): void => {
     if (endedLocal) return;
-    // 初始可见态：dissolve 便签本就可见（mask 全可见）；materialize 从空开始
-    // （mask 全透明 + clip 全裁 + opacity=0 三重保险：即使首帧 mask 解码慢/失败，
-    //  也不会闪现旧内容或卡在空白——opacity 随帧淡入，看门狗外始终有兜底画面）。
     renderMask(0);
     setMask(maskCanvas.toDataURL());
     try {
-      root.style.clipPath = isDissolve ? "" : "inset(0 0 100% 0)";
-      if (!isDissolve) root.style.opacity = "0"; // materialize：随帧淡入（防卡死兜底）
+      root.style.clipPath = "";
       root.style.boxShadow = "none";
+      root.style.opacity = ""; // 清除可能残留的后半段淡出透明度，从 100% 开始
     } catch {
       /* ignore */
     }
@@ -925,18 +804,12 @@ function runGlow(
     watchdog = window.setTimeout(() => {
       if (endedLocal) return;
       stopLoop();
-      if (isDissolve) {
-        cleanupAfterHide();
-        onDone();
-      } else {
-        finishMaterialize();
-        onDone();
-      }
+      cleanupAfterHide();
+      onDone();
     }, duration + 600);
   };
 
-  // 颜色场就绪后再启动循环（纯色主题立即；背景图 ≤140ms 上限解码），
-  // 保证所有粒子都采到最终主题色。期间被取消则不再启动。
+  // 颜色场就绪后再启动循环（纯色主题立即；背景图 ≤140ms 上限解码）
   buildColorField(root, w, h).then((f) => {
     if (endedLocal) return;
     field = f;

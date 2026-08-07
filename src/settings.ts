@@ -943,7 +943,7 @@ export async function openSettingsModal(): Promise<void> {
   particleCountSlider.addEventListener("input", () => {
     particleCountVal.textContent = particleCountSlider.value;
   });
-  // ---- 动画效果：particle=粒子消散（呼出+关闭·默认·向外扩散）、inhale=粒子吸入（与粒子同套风效·向内汇聚，独立成项便于日后分化）、erode=火焰（呼出+关闭，橙黄火舌贴燃烧边；设置值 "erode" 为历史命名）----
+  // ---- 动画效果：particle=粒子消散（仅关闭·默认·多点起爆向外扩散；呼出直接显示）、inhale=粒子吸入（呼出+关闭，向内汇聚，独立成项便于日后分化）、erode=火焰（呼出+关闭，橙黄火舌贴燃烧边；设置值 "erode" 为历史命名）----
   // 注意：必须先设置 value 再 enhanceSelect，否则自定义下拉的 label 会停在第一个选项上
   // （enhanceSelect 内部会立即按当前选中项渲染文本，后设 value 不会触发它重新同步）。
   const particleModeSel = overlay.querySelector("#set-particle-mode") as HTMLSelectElement;

@@ -763,18 +763,21 @@ function runFlame(
   }
 
   const cleanupAfterHide = () => {
-    // 代次守卫：若已启动新动画（flameGen 改变），本实例的延时清理作废，
-    // 否则会把正在播放的新动画便签裁掉/隐藏（快速关闭后立刻呼出时会触发）。
-    if (myGen !== flameGen) return;
+    // 本实例资源（rAF/计时器/canvas）必须无条件释放——
+    // 若随代次守卫一起跳过，每次「关闭后 400ms 内呼出」都泄漏 canvas，
+    // 多次后内存累积会压垮渲染进程（崩溃页哭脸 + 白屏）。
     stopLoop();
-    // 保持"空画面"供下次呼出（契约同 dissolve.ts cleanup）
-    blankRoot(root);
     try {
       canvas.remove();
       sparkCanvas.remove();
     } catch {
       /* ignore */
     }
+    // 代次守卫（仅保护便签本体样式）：若已启动新动画（flameGen 改变），本实例的
+    // 延时清理作废，不再 blankRoot——否则会把正在播放的新动画便签裁掉/隐藏。
+    if (myGen !== flameGen) return;
+    // 保持"空画面"供下次呼出（契约同 dissolve.ts cleanup）
+    blankRoot(root);
     flaming = false;
   };
 

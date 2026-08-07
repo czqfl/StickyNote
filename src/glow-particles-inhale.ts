@@ -191,8 +191,8 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
  *  不再强行拉亮成浅色——背景是什么颜色，粒子就是什么颜色。 */
 function toGlowColor(r: number, g: number, b: number): [number, number, number] {
   const [h, s, l] = rgbToHsl(r, g, b);
-  const nl = Math.max(l, 0.38); // 仅兜底：深色背景轻微提亮保证 additive 下可见
-  const ns = Math.max(s, 0.2); // 避免发灰
+  const nl = Math.max(l, 0.62); // 兜底提亮：深色主题下粒子也足够明亮（additive 叠加后清晰可见）
+  const ns = Math.max(s, 0.3); // 避免发灰
   return hslToRgb(h, ns, nl);
 }
 
@@ -383,7 +383,7 @@ function runGlow(
       float bright = grain * (0.85 + 0.15 * core);
       float glow = (1.0 - smoothstep(edge, edge + 0.7, rr)) * 0.32; // 柔和辉光晕：提升可见度，避免"看不清"
       float a = max(a0 * bright, glow * (1.0 - a0));              // 颗粒主体 + 仅在主体之外的外晕
-      gl_FragColor = vec4(v_color, v_alpha * a);
+      gl_FragColor = vec4(v_color * 1.5, v_alpha * a);
     }`;
   const compileGL = (type: number, src: string): WebGLShader | null => {
     const sh = gl.createShader(type);
@@ -545,7 +545,7 @@ function runGlow(
   // 采用「连续发射 + 峰值存活上限」模型：全局发射率由峰值存活数换算，池子只需容纳
   // peakAlive + 余量；不会像旧版"每格一次性爆发"那样被早发光的边缘格子趁池未满占满，
   // 导致中央（最后才扫到）格子被拒、留下一片无粒子空白。两道扫掠得以在中间用粒子衔接。
-  const peakAlive = Math.round(2600 + density * 16000); // 峰值存活粒子数 2600 ~ 18600（随强度；最大配置较旧版提升 3 倍）
+  const peakAlive = Math.round(4300 + density * 26500); // 峰值存活粒子数（发射点更密，峰值同步放大）
   const avgLife = 1150; // 粒子平均寿命 ms（把峰值存活换算成发射率）
   const maxP = peakAlive + 1500; // 余量应对节流帧瞬时多发
   const px = new Float32Array(maxP);
@@ -567,7 +567,7 @@ function runGlow(
   let pcount = 0;
 
   // ---- 发射点网格：铺满整面（更密），每个点在前沿扫过后持续涌出粒子（见帧循环）----
-  const emitSpacing = 9;
+  const emitSpacing = 7; // 发射点间距 9→7px：发射点更密、粒子更多
   const ecx = Math.max(2, Math.ceil(w / emitSpacing));
   const ecy = Math.max(2, Math.ceil(h / emitSpacing));
   const emitX = new Float32Array(ecx * ecy);
@@ -701,7 +701,7 @@ function runGlow(
     plife[i] = life;
     page[i] = 0;
     const r1 = Math.random(), r2 = Math.random();
-    psize[i] = 1.6 + r1 * r2 * 4.0; // 沙粒尺寸 1.6~5.6px：提高可见度下限，避免颗粒太细看不清
+    psize[i] = 1.1 + r1 * r2 * 2.6; // 沙粒尺寸 1.1~3.7px：更细小的颗粒（配合更密发射点呈细砂感）
     pseed[i] = Math.random() * 100.0;  // 形状/噪声种子（错相）
     prot[i] = Math.random() * Math.PI * 2; // 颗粒随机自转朝向
     paniso[i] = Math.random();         // 各向异性：越高被风拉得越长（沙粒条状）
@@ -750,16 +750,19 @@ function runGlow(
   }
 
   const cleanupAfterHide = () => {
-    // 代次守卫：若已启动新动画（inhaleGen 改变），本实例的延时清理作废，
-    // 否则会把正在播放的新动画便签裁掉/隐藏（快速关闭后立刻呼出时会触发）。
-    if (myGen !== inhaleGen) return;
+    // 本实例资源（rAF/计时器/WebGL context/canvas）必须无条件释放——
+    // 若随代次守卫一起跳过，每次「关闭后 400ms 内呼出」都泄漏一个 WebGL canvas，
+    // 多次后 GPU 内存累积会压垮渲染进程（崩溃页哭脸 + 白屏）。
     stopLoop();
-    blankRoot(root); // 保持“空画面”供下次呼出
     try {
       canvas.remove();
     } catch {
       /* ignore */
     }
+    // 代次守卫（仅保护便签本体样式）：若已启动新动画（inhaleGen 改变），本实例的
+    // 延时清理作废，不再 blankRoot——否则会把正在播放的新动画便签裁掉/隐藏。
+    if (myGen !== inhaleGen) return;
+    blankRoot(root); // 保持“空画面”供下次呼出
     inhaleActive = false;
   };
 
