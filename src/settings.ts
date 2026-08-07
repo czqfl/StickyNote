@@ -478,13 +478,13 @@ export async function openSettingsModal(): Promise<void> {
                 <span class="theme-preview" id="theme-preview"></span>
               </div>
               <label class="settings-check"><input type="checkbox" id="set-edge-snap"> 贴边自动收起 / 弹出（QQ 风格）</label>
-              <div class="settings-row">
+              <div class="settings-row" id="particle-count-row">
                 <label class="settings-label">粒子数量</label>
                 <input type="range" id="particle-count" min="0" max="100" step="1" value="50">
                 <span class="settings-val" id="particle-count-val">50</span>
               </div>
               <div class="settings-row">
-                <label class="settings-label">粒子风格</label>
+                <label class="settings-label">动画效果</label>
                 <select class="settings-select" id="set-particle-mode">
                   <option value="particle">粒子消散</option>
                   <option value="inhale">粒子吸入</option>
@@ -943,7 +943,7 @@ export async function openSettingsModal(): Promise<void> {
   particleCountSlider.addEventListener("input", () => {
     particleCountVal.textContent = particleCountSlider.value;
   });
-  // ---- 粒子风格：particle=粒子消散（呼出+关闭·默认·向外扩散）、inhale=粒子吸入（与粒子同套风效·向内汇聚，独立成项便于日后分化）、erode=火焰（呼出+关闭，橙黄火舌贴燃烧边；设置值 "erode" 为历史命名）----
+  // ---- 动画效果：particle=粒子消散（呼出+关闭·默认·向外扩散）、inhale=粒子吸入（与粒子同套风效·向内汇聚，独立成项便于日后分化）、erode=火焰（呼出+关闭，橙黄火舌贴燃烧边；设置值 "erode" 为历史命名）----
   // 注意：必须先设置 value 再 enhanceSelect，否则自定义下拉的 label 会停在第一个选项上
   // （enhanceSelect 内部会立即按当前选中项渲染文本，后设 value 不会触发它重新同步）。
   const particleModeSel = overlay.querySelector("#set-particle-mode") as HTMLSelectElement;
@@ -951,6 +951,14 @@ export async function openSettingsModal(): Promise<void> {
     draft.particle_mode === "erode" ? "erode" :
     draft.particle_mode === "inhale" ? "inhale" : "particle";
   enhanceSelect(particleModeSel);
+  // ---- 粒子数量仅在「粒子吸入 / 粒子消散」时显示；火焰不使用该数值 ----
+  const particleCountRow = overlay.querySelector("#particle-count-row") as HTMLElement;
+  const syncParticleCountVisibility = () => {
+    const show = particleModeSel.value !== "erode";
+    particleCountRow.style.display = show ? "" : "none";
+  };
+  syncParticleCountVisibility();
+  particleModeSel.addEventListener("change", syncParticleCountVisibility);
 
   // ---- 全局默认背景图 ----
   const bgUploadBtn = overlay.querySelector("#bg-upload") as HTMLButtonElement;
