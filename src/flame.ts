@@ -420,25 +420,24 @@ function runFlame(
       }
     }
 
-    // 2) 前沿注入（写入 dst）：每个火焰场列经 colMap 找到对应 mask 列，对**该列所有前沿**
-    //    （底部推进前沿 + 洞上沿 + 洞下沿）都注入热值——洞向四周扩散时每个侵蚀边缘都出火。
+    // 2) 燃烧带注入（写入 dst）：每个火焰场列经 colMap 找到对应 mask 列，在该列的**燃烧带**
+    //    （mask alpha 处于过渡区的所有行）注入热值——火焰与侵蚀轨迹完全一致，边缘不漏段。
     for (let fx = 0; fx < fireW; fx++) {
       const mx = colMap[fx];
-      const n = frontCount[mx];
-      if (n === 0) continue;
-      // 火焰成簇：低频正弦调制（火舌旺弱交替，但**不归零**——保证每条前沿都有火焰，
+      if (!bandHas[mx]) continue;
+      // 火焰成簇：低频正弦调制（火舌旺弱交替，但**不归零**——保证每条燃烧带都出火，
       // 只是强弱不同；配合随机扰动产生摇曳）
       const cluster =
         0.82 +
         0.13 * Math.sin(fx * 0.35 + age * 0.0004) +
         0.1 * Math.sin(fx * 0.9 - age * 0.0007 + 2.0);
-      // 注入热值：下限保护（>=50，即所有前沿列至少出火），上限 220（整体压低，不刺眼）
-      const heat = Math.max(50, Math.min(220, Math.round(injectHeat * cluster * (0.65 + Math.random() * 0.35))));
-      for (let k = 0; k < n; k++) {
-        const fRow = frontList[mx * 4 + k] / 2; // 还原（×2 存储）
-        const fy = Math.round((fRow / rows) * fireH); // 前沿行（火焰场坐标）
+      // 注入热值：下限保护（>=60，即所有燃烧带列至少出火），上限 230（整体压低，不刺眼）
+      const baseHeat = Math.max(60, Math.min(230, Math.round(injectHeat * cluster * (0.7 + Math.random() * 0.3))));
+      const loM = bandLo[mx], hiM = bandHi[mx];
+      for (let my = loM; my <= hiM; my++) {
+        const fy = Math.round((my / rows) * fireH); // 燃烧带行（火焰场坐标）
         if (fy < 0 || fy >= fireH) continue;
-        // 热值注入在燃烧前沿本身（双向传播会向上下两个方向舔出火舌，前沿两侧都出火）
+        const heat = Math.max(55, baseHeat); // 带内保下限，连续出火
         const idx = fy * fireW + fx;
         dst[idx] = Math.max(dst[idx], heat);
         if (fx > 0) dst[idx - 1] = Math.max(dst[idx - 1], Math.round(heat * 0.7));
@@ -446,26 +445,19 @@ function runFlame(
       }
     }
 
-    // 3) 裁剪：无前沿列清零；有前沿列保留**所有前沿**的两侧火焰带（各前沿带取并集）——
-    //    洞上沿/下沿各自向上（dissolve）/向下（materialize）延伸 flameRows。
+    // 3) 裁剪：无燃烧带列清零；有燃烧带列保留燃烧带两侧各 flameRows 的火焰带——
+    //    火焰紧贴侵蚀轨迹（燃烧带）并向外舔出，其它区域清零（避免全屏糊火）。
     const keepMin = new Int16Array(fireW);
     const keepMax = new Int16Array(fireW);
     keepMin.fill(-1);
     keepMax.fill(-1);
     for (let fx = 0; fx < fireW; fx++) {
       const mx = colMap[fx];
-      const n = frontCount[mx];
-      if (n === 0) continue;
-      let lo = fireH, hi = 0;
-      for (let k = 0; k < n; k++) {
-        const fRow = frontList[mx * 4 + k] / 2;
-        const fy = Math.round((fRow / rows) * fireH);
-        // 火焰带跨在燃烧前沿两侧（双向）：底部前沿/上边沿/洞上下沿都出火
-        lo = Math.min(lo, Math.max(0, fy - flameRows));
-        hi = Math.max(hi, Math.min(fireH - 1, fy + flameRows));
-      }
-      keepMin[fx] = lo;
-      keepMax[fx] = hi;
+      if (!bandHas[mx]) continue;
+      const fyLo = Math.round((bandLo[mx] / rows) * fireH);
+      const fyHi = Math.round((bandHi[mx] / rows) * fireH);
+      keepMin[fx] = Math.max(0, fyLo - flameRows);
+      keepMax[fx] = Math.min(fireH - 1, fyHi + flameRows);
     }
     for (let x = 0; x < fireW; x++) {
       const lo = keepMin[x];
@@ -553,11 +545,11 @@ function runFlame(
     const chance = 0.07 * density * (0.4 + 0.6 * remain); // 零星火星（小而亮，点缀不糊）
     for (let x = 0; x < cols; x++) {
       if (Math.random() > chance) continue;
-      const f = frontArr[x];
-      if (f < 0) continue;
+      if (!bandHas[x]) continue;
+      const f = (bandLo[x] + bandHi[x]) * 0.5; // 燃烧带中心（mask 行）
       if (sparkCount >= MAX_SPARKS) break;
       const i = sparkCount++;
-      // 火星从前沿位置（画布坐标）迸出，随机方向（偏上为主、略带斜向）
+      // 火星从燃烧带位置（画布坐标）迸出，随机方向（偏上为主、略带斜向）
       const px = ((x + Math.random()) / cols) * w;
       const py = ((f + (Math.random() - 0.5) * 1.5) / rows) * h;
       spx[i] = px;
@@ -611,36 +603,32 @@ function runFlame(
     sctx.globalCompositeOperation = "source-over";
   };
 
-  // ---- 燃烧前沿定位：逐列收集**所有** α 下降沿（可见→烧没），支持多个侵蚀边缘 ----
-  // 烧出洞后一列会有多个前沿：底部推进前沿 + 洞上沿 + 洞下沿——每个边缘都要出火。
-  // frontArr 兼容旧单前沿用法（取第一个），新增 frontList（全部前沿行）供火焰注入。
-  const frontArr = new Float32Array(mw);
-  const frontList = new Int16Array(mw * 4); // 每列最多 4 个前沿行
-  const frontCount = new Uint8Array(mw);    // 每列前沿个数
-  const burnArr = new Float32Array(mw);
+  // ---- 燃烧带定位：逐列找出「正在侵蚀」的连续像素带（mask alpha 处于羽化过渡区的行）----
+  // 与「侵蚀轨迹」完全一致：凡 mask 当前在软边过渡（alpha∈[BAND_LO,BAND_HI]）处都算燃烧带，
+  // 洞的上下沿、底部推进前沿、种子洞内部统统被包含（过渡带是连续的，连洞也包进去）→
+  // 火焰 100% 贴合侵蚀边缘，不漏段、不依赖 0.5 穿越点检测（旧方案会漏检导致部分边缘无火）。
+  const BAND_LO = 0.08, BAND_HI = 0.92; // alpha 过渡带阈值（羽化软边区）
+  const bandLo = new Int16Array(mw);   // 每列燃烧带起始行（mask 行），无则保持 -1
+  const bandHi = new Int16Array(mw);   // 每列燃烧带结束行
+  const bandHas = new Uint8Array(mw);  // 每列是否有燃烧带
   const computeFlameField = (): void => {
     const cols = mw, rows = mh;
     for (let x = 0; x < cols; x++) {
-      let f = -1;
-      let n = 0;
-      let prev = ((px32[x] >>> 24) & 0xff) / 255; // 顶行
-      let burned = 0; // 本列已烧尽（α<0.5）的像素数
+      let lo = -1, hi = -1;
       for (let y = 0; y < rows; y++) {
-        const cur = ((px32[x + y * cols] >>> 24) & 0xff) / 255;
-        if (cur < 0.5) burned++;
-        // α 穿越 0.5 的边界（下降沿=洞上沿/底部前沿；上升沿=洞下沿）都是侵蚀边缘，
-        // 每个边缘都要出火——洞向四周扩散时，洞上沿、洞下沿、底部前沿全都有火焰
-        if ((prev - 0.5) * (cur - 0.5) < 0 && prev !== cur) {
-          const cross = (y - 1) + (0.5 - prev) / (cur - prev); // 线性插值穿越点
-          if (n < 4) frontList[x * 4 + n] = Math.round(cross * 2); // ×2 保半行精度
-          n++;
-          if (f < 0) f = cross; // 第一个前沿（兼容旧用法）
+        const a = ((px32[x + y * cols] >>> 24) & 0xff) / 255;
+        if (a > BAND_LO && a < BAND_HI) {
+          if (lo < 0) lo = y;
+          hi = y;
         }
-        prev = cur;
       }
-      frontArr[x] = f;
-      frontCount[x] = n;
-      burnArr[x] = burned / rows;
+      if (lo >= 0) {
+        bandLo[x] = lo;
+        bandHi[x] = hi;
+        bandHas[x] = 1;
+      } else {
+        bandHas[x] = 0;
+      }
     }
   };
 
@@ -824,7 +812,7 @@ function runFlame(
     spawnSparks(age);
     updateSparks(dtMs);
 
-    // ---- 火焰场：先定位燃烧前沿（frontArr），再逐像素渲染连续火焰体 ----
+    // ---- 火焰场：先定位燃烧带（bandLo/bandHi），再逐像素渲染连续火焰体 ----
     computeFlameField();
     updateFlameField(age);
 
