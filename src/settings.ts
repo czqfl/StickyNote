@@ -488,7 +488,7 @@ export async function openSettingsModal(): Promise<void> {
                 <select class="settings-select" id="set-particle-mode">
                   <option value="particle">粒子消散</option>
                   <option value="inhale">粒子吸入</option>
-                  <option value="erode">火焰</option>
+                  <option value="erode">火焰侵蚀</option>
                 </select>
               </div>
             </div>

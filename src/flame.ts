@@ -359,9 +359,9 @@ function runFlame(
     }
   }
 
-  // ---- 火焰场渲染：热值从当前前沿注入 → 向上传播衰减 → 调色板映射 ----
-  // 每帧调用；热值注入在前沿行，传播向活动侧（dissolve 向上；materialize 向下成形
-  // 时火焰随边缘向下舔）。
+  // ---- 火焰场渲染：热值从当前前沿注入 → 双向传播衰减 → 调色板映射 ----
+  // 每帧调用；热值注入在前沿行，向**上下两侧**双向传播（dissolve/materialize 通用，
+  // 边缘两侧都出火，上边沿与洞下沿也能看到火焰舔舐）。
   // 列映射表：每个火焰场列 → 最近的 mask 列（fireW/cols 非整数时避免映射空隙列无火）
   const colMap = new Int16Array(fireW);
   for (let fx = 0; fx < fireW; fx++) {
@@ -381,34 +381,27 @@ function runFlame(
     const dst = fireBufB;
     dst.fill(0);
     const rows = mh;
-    const dir = isDissolve ? -1 : 1; // 活动侧方向
 
-    // 1) 传播（Doom Fire 核心：活动侧方向 3 像素加权均值 × 衰减系数，读 src 写 dst）
+    // 1) 双向传播（Doom Fire 核心：每个像素向「上下」两个方向按衰减系数扩散，读 src 写 dst）
+    //    ——火焰在燃烧前沿的**两侧**都可见：上边沿、洞下沿等「完整侧在窗口外/已烧没区」的
+    //    边缘，单向传播时火焰会飘出窗口而消失，双向传播后这些边缘也能看到火焰舔舐。
     const decay = 0.88; // 衰减系数：越大火焰越高（0.8~0.9 区间）
-    if (isDissolve) {
-      for (let y = 1; y < fireH; y++) {
-        const row = y * fireW;
-        const rowAbove = (y - 1) * fireW;
-        for (let x = 0; x < fireW; x++) {
-          const v = src[row + x];
-          if (v < 2) continue;
-          const l = x > 0 ? src[row + x - 1] : v;
-          const r = x < fireW - 1 ? src[row + x + 1] : v;
-          const d = (l + v * 2 + r) * 0.25 * decay;
-          if (d > dst[rowAbove + x]) dst[rowAbove + x] = d > 255 ? 255 : d;
+    for (let y = 0; y < fireH; y++) {
+      const row = y * fireW;
+      for (let x = 0; x < fireW; x++) {
+        const v = src[row + x];
+        if (v < 2) continue;
+        const l = x > 0 ? src[row + x - 1] : v;
+        const r = x < fireW - 1 ? src[row + x + 1] : v;
+        const d = (l + v * 2 + r) * 0.25 * decay;
+        if (d < 2) continue;
+        if (y > 0) {
+          const idx = (y - 1) * fireW + x;
+          if (d > dst[idx]) dst[idx] = d > 255 ? 255 : d;
         }
-      }
-    } else {
-      for (let y = fireH - 2; y >= 0; y--) {
-        const row = y * fireW;
-        const rowBelow = (y + 1) * fireW;
-        for (let x = 0; x < fireW; x++) {
-          const v = src[row + x];
-          if (v < 2) continue;
-          const l = x > 0 ? src[row + x - 1] : v;
-          const r = x < fireW - 1 ? src[row + x + 1] : v;
-          const d = (l + v * 2 + r) * 0.25 * decay;
-          if (d > dst[rowBelow + x]) dst[rowBelow + x] = d > 255 ? 255 : d;
+        if (y < fireH - 1) {
+          const idx = (y + 1) * fireW + x;
+          if (d > dst[idx]) dst[idx] = d > 255 ? 255 : d;
         }
       }
     }
@@ -431,17 +424,15 @@ function runFlame(
         const fRow = frontList[mx * 4 + k] / 2; // 还原（×2 存储）
         const fy = Math.round((fRow / rows) * fireH); // 前沿行（火焰场坐标）
         if (fy < 0 || fy >= fireH) continue;
-        const y0 = fy + dir;
-        if (y0 < 0 || y0 >= fireH) continue;
-        // 热值注入（带横向扩散，形成火舌宽度）
-        const idx = y0 * fireW + fx;
+        // 热值注入在燃烧前沿本身（双向传播会向上下两个方向舔出火舌，前沿两侧都出火）
+        const idx = fy * fireW + fx;
         dst[idx] = Math.max(dst[idx], heat);
         if (fx > 0) dst[idx - 1] = Math.max(dst[idx - 1], Math.round(heat * 0.7));
         if (fx < fireW - 1) dst[idx + 1] = Math.max(dst[idx + 1], Math.round(heat * 0.7));
       }
     }
 
-    // 3) 裁剪：无前沿列清零；有前沿列保留**所有前沿**的活动侧火焰带（各前沿带取并集）——
+    // 3) 裁剪：无前沿列清零；有前沿列保留**所有前沿**的两侧火焰带（各前沿带取并集）——
     //    洞上沿/下沿各自向上（dissolve）/向下（materialize）延伸 flameRows。
     const keepMin = new Int16Array(fireW);
     const keepMax = new Int16Array(fireW);
@@ -451,18 +442,13 @@ function runFlame(
       const mx = colMap[fx];
       const n = frontCount[mx];
       if (n === 0) continue;
-      let lo = isDissolve ? fireH : 0;
-      let hi = isDissolve ? 0 : fireH;
+      let lo = fireH, hi = 0;
       for (let k = 0; k < n; k++) {
         const fRow = frontList[mx * 4 + k] / 2;
         const fy = Math.round((fRow / rows) * fireH);
-        if (isDissolve) {
-          lo = Math.min(lo, Math.max(0, fy - flameRows));
-          hi = Math.max(hi, Math.min(fireH - 1, fy));
-        } else {
-          lo = Math.min(lo, Math.max(0, fy));
-          hi = Math.max(hi, Math.min(fireH - 1, fy + flameRows));
-        }
+        // 火焰带跨在燃烧前沿两侧（双向）：底部前沿/上边沿/洞上下沿都出火
+        lo = Math.min(lo, Math.max(0, fy - flameRows));
+        hi = Math.max(hi, Math.min(fireH - 1, fy + flameRows));
       }
       keepMin[fx] = lo;
       keepMax[fx] = hi;
