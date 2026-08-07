@@ -385,6 +385,9 @@ function runFlame(
     // 1) 双向传播（Doom Fire 核心：每个像素向「上下」两个方向按衰减系数扩散，读 src 写 dst）
     //    ——火焰在燃烧前沿的**两侧**都可见：上边沿、洞下沿等「完整侧在窗口外/已烧没区」的
     //    边缘，单向传播时火焰会飘出窗口而消失，双向传播后这些边缘也能看到火焰舔舐。
+    //    关键：必须加「随机水平风偏」+「每像素随机掉热」——否则某些列会被确定性竖直扩散
+    //    强化成笔直向上的细长光线（草状伪影，明显不像火焰）。这是 Doom Fire 经典手法：
+    //    风偏让火舌左右摇曳、随机掉热烧断竖直长线，火焰尖端自然闪烁。
     const decay = 0.88; // 衰减系数：越大火焰越高（0.8~0.9 区间）
     for (let y = 0; y < fireH; y++) {
       const row = y * fireW;
@@ -393,15 +396,26 @@ function runFlame(
         if (v < 2) continue;
         const l = x > 0 ? src[row + x - 1] : v;
         const r = x < fireW - 1 ? src[row + x + 1] : v;
-        const d = (l + v * 2 + r) * 0.25 * decay;
+        let d = (l + v * 2 + r) * 0.25 * decay;
         if (d < 2) continue;
+        // 随机掉热：每像素 0/1 衰减，烧断竖直长线（草状伪影根因之一）
+        d -= Math.random() < 0.5 ? 0 : 1;
+        if (d < 2) continue;
+        // 随机水平风偏：-1/0/+1，让火舌左右摇曳、不再连成笔直光线
+        const wind = (Math.random() * 3 | 0) - 1;
         if (y > 0) {
-          const idx = (y - 1) * fireW + x;
-          if (d > dst[idx]) dst[idx] = d > 255 ? 255 : d;
+          const nx = x + wind;
+          if (nx >= 0 && nx < fireW) {
+            const idx = (y - 1) * fireW + nx;
+            if (d > dst[idx]) dst[idx] = d > 255 ? 255 : d;
+          }
         }
         if (y < fireH - 1) {
-          const idx = (y + 1) * fireW + x;
-          if (d > dst[idx]) dst[idx] = d > 255 ? 255 : d;
+          const nx = x + wind;
+          if (nx >= 0 && nx < fireW) {
+            const idx = (y + 1) * fireW + nx;
+            if (d > dst[idx]) dst[idx] = d > 255 ? 255 : d;
+          }
         }
       }
     }
